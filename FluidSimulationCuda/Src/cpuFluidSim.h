@@ -6,5 +6,5 @@
 
 
 void init(int width, int height, int scale);
-void on_frame(GLuint& texture);
+void on_frame(GLuint& texture, float dt, bool isPressed);
 void on_mouse_button(int x, int y);

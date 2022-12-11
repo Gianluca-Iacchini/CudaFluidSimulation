@@ -11,9 +11,9 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 void processInput(GLFWwindow* window);
 
 // settings
-const unsigned int SCR_WIDTH = 512;
-const unsigned int SCR_HEIGHT = 512;
-const int SCALE = 2;
+const unsigned int SCR_WIDTH = 1024;
+const unsigned int SCR_HEIGHT = 1024;
+const int SCALE = 8;
 
 float vertices[] = {
 	-1.0f, -1.0f, 1.0f, -1.0f,
@@ -125,7 +125,7 @@ int main()
 
 		
 		//computeField(deltaTime, xPos/SCALE, (SCR_HEIGHT - yPos)/SCALE, lastXPos/SCALE, (SCR_HEIGHT - (lastYPos))/SCALE, isPressed);
-		on_frame(texture);
+		on_frame(texture, deltaTime, isPressed);
 
 		glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT);
