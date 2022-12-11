@@ -10,7 +10,8 @@
 
 
 
-
+#define CLAMP(val, minv, maxv) fminf(maxv, fmaxf(minv, val))
+#define MIX(v0, v1, t) v0 * (1.f - t) + v1 * t 
 
 //void draw_circle(float x, float y, float r, int n = 100) {
 //    vec2f pos[n];
@@ -79,13 +80,13 @@ float vorticity = 10.0f;
 
 float2 mouse;
 
-Grid<float2> old_velocity;
-Grid<float2> new_velocity;
+float2* old_velocity;
+float2* new_velocity;
 
 Grid<float> old_density;
 Grid<float> new_density;
 
-Grid<uchar4> pixels;
+uchar4* pixels;
 
 Grid<float> old_pressure;
 Grid<float> new_pressure;
@@ -112,13 +113,18 @@ void init(int width, int height, int scale) {
     nx = width / scale;
     ny = height / scale;
 
-    initGrid(old_velocity, nx, ny);
-    initGrid(new_velocity, nx, ny);
+    //initGrid(old_velocity, nx, ny);
+    //initGrid(new_velocity, nx, ny);
+    old_velocity = new float2[nx * ny];
+    new_velocity = new float2[nx * ny];
+
 
     initGrid(old_density, nx, ny);
     initGrid(new_density, nx, ny);
     
-    initGrid(pixels, nx, ny);
+
+    pixels = new uchar4[nx * ny];
+    //initGrid(pixels, nx, ny);
 
     initGrid(old_pressure, nx, ny);
     initGrid(new_pressure, nx, ny);
@@ -128,7 +134,7 @@ void init(int width, int height, int scale) {
 
     FOR_EACH_CELL{
     old_density(x, y) = 0.0f;
-    old_velocity(x, y) = float2{0.0f, 0.0f};
+    old_velocity[x + y * nx] = float2{0.0f, 0.0f};
     }
 }
 
@@ -145,9 +151,22 @@ T interpolate(const Grid<T>& grid, float2 p) {
     );
 }
 
+
+float2 interpolate(float2* grid, float2 p) {
+    int ix = floorf(p.x);
+    int iy = floorf(p.y);
+    float ux = p.x - ix;
+    float uy = p.y - iy;
+    return lerp(
+        lerp(grid[int(CLAMP(ix, 0, nx-1)) + nx * int(CLAMP(iy, 0, ny-1))], grid[int(CLAMP(ix+1, 0, nx-1)) + nx * int(CLAMP(iy, 0, ny-1))], ux),
+        lerp(grid[int(CLAMP(ix, 0, nx-1)) + nx * int(CLAMP(iy+1, 0, ny-1))], grid[int(CLAMP(ix+1, 0, nx-1)) + nx * int(CLAMP(iy+1, 0, ny-1))], ux),
+        uy
+    );
+}
+
 void advect_density() {
     FOR_EACH_CELL{
-        float2 pos = make_float2(x, y) - dt * old_velocity(x, y);
+        float2 pos = make_float2(x, y) - dt * old_velocity[x + y * nx];
         new_density(x, y) = interpolate(old_density, pos);
     }
     old_density.swap(new_density);
@@ -155,10 +174,10 @@ void advect_density() {
 
 void advect_velocity() {
     FOR_EACH_CELL{
-        float2 pos = make_float2(x, y) - dt * old_velocity(x, y);
-        new_velocity(x, y) = interpolate(old_velocity, pos);
+        float2 pos = make_float2(x, y) - dt * old_velocity[x + y * nx];
+        new_velocity[x + y * nx] = interpolate(old_velocity, pos);
     }
-    old_velocity.swap(new_velocity);
+    std::swap(old_velocity, new_velocity);
 }
 
 void diffuse_density() {
@@ -182,15 +201,15 @@ void diffuse_velocity() {
     FOR_EACH_CELL{
         float2 sum =
             viscosity * (
-             old_velocity(x - 1, y + 0)
-            + old_velocity(x + 1, y + 0)
-            + old_velocity(x + 0, y - 1)
-            + old_velocity(x + 0, y + 1)
+             old_velocity[int(CLAMP(x-1, 0, nx-1)) + nx * int(CLAMP(y, 0, ny-1))]
+            + old_velocity[int(CLAMP(x + 1, 0, nx-1)) + nx * int(CLAMP(y, 0, ny-1))]
+            + old_velocity[int(CLAMP(x, 0, nx-1)) + nx * int(CLAMP(y-1, 0, ny-1))]
+            + old_velocity[int(CLAMP(x, 0, nx-1)) + nx * int(CLAMP(y+1, 0, ny-1))]
             )
-            + old_velocity(x + 0, y + 0);
-        new_velocity(x, y) = 1.0f / (1.0f + 4.0f * viscosity) * sum;
+            + old_velocity[x + y * nx];
+        new_velocity[x + y * nx] = 1.0f / (1.0f + 4.0f * viscosity) * sum;
     }
-    old_velocity.swap(new_velocity);
+    std::swap(old_velocity, new_velocity);
 }
 
 void project_velocity() {
@@ -198,8 +217,8 @@ void project_velocity() {
     memset(old_pressure.values, 0, nx * ny * sizeof(float));
 
     FOR_EACH_CELL{
-        float dx = old_velocity(x + 1, y + 0).x - old_velocity(x - 1, y + 0).x;
-        float dy = old_velocity(x + 0, y + 1).y - old_velocity(x + 0, y - 1).y;
+        float dx = old_velocity[int(CLAMP(x+1, 0, nx-1)) + nx * int(CLAMP(y, 0, ny-1))].x - old_velocity[int(CLAMP(x - 1, 0, nx-1)) + nx * int(CLAMP(y, 0, ny-1))].x;
+        float dy = old_velocity[int(CLAMP(x, 0, nx-1)) + nx * int(CLAMP(y+1, 0, ny-1))].y - old_velocity[int(CLAMP(x, 0, nx-1)) + nx * int(CLAMP(y-1, 0, ny-1))].y;
         divergence(x, y) = dx + dy;
         old_pressure(x, y) = 0.0f;
     }
@@ -217,15 +236,15 @@ void project_velocity() {
     }
 
     FOR_EACH_CELL{
-        old_velocity(x, y).x -= 0.5f * (old_pressure(x + 1, y + 0) - old_pressure(x - 1, y + 0));
-        old_velocity(x, y).y -= 0.5f * (old_pressure(x + 0, y + 1) - old_pressure(x + 0, y - 1));
+        old_velocity[x + y * nx].x -= 0.5f * (old_pressure(x + 1, y + 0) - old_pressure(x - 1, y + 0));
+        old_velocity[x + y * nx].y -= 0.5f * (old_pressure(x + 0, y + 1) - old_pressure(x + 0, y - 1));
     }
 }
 
 float curl(int x, int y) {
     return
-        old_velocity(x, y + 1).x - old_velocity(x, y - 1).x +
-        old_velocity(x - 1, y).y - old_velocity(x + 1, y).y;
+        old_velocity[int(CLAMP(x, 0, nx-1)) + nx * int(CLAMP(y + 1, 0, ny-1))].x - old_velocity[int(CLAMP(x, 0, nx-1)) + nx * int(CLAMP(y - 1, 0, ny-1))].x +
+        old_velocity[int(CLAMP(x-1, 0, nx-1)) + nx * int(CLAMP(y, 0, ny-1))].y - old_velocity[int(CLAMP(x+1, 0, nx-1)) + nx * int(CLAMP(y, 0, ny-1))].y;
 }
 
 void vorticity_confinement() {
@@ -242,10 +261,10 @@ void vorticity_confinement() {
 
             if (x < nx / 2) direction *= 0.0f;
 
-            new_velocity(x, y) = old_velocity(x, y) + dt * curl(x, y) * direction;
+            new_velocity[x + y * nx] = old_velocity[x + y * nx] + dt * curl(x, y) * direction;
     }
 
-    old_velocity.swap(new_velocity);
+    std::swap(old_velocity, new_velocity);
 }
 
 void add_density(int px, int py, int r = 10, float value = 0.5f) {
@@ -279,7 +298,7 @@ void fluid_simulation_step() {
 
         // dense regions rise up
     FOR_EACH_CELL{
-            old_velocity(x, y).y += (old_density(x, y) * 20.0f - 5.0f) * dt;
+            old_velocity[x + y * nx].y += (old_density(x, y) * 20.0f - 5.0f) * dt;
     }
 
     add_density(mouse.x, mouse.y, 10, 0.5f);
@@ -311,7 +330,7 @@ void fluid_simulation_step() {
     FOR_EACH_CELL{
         if (y < 10) {
             old_density(x, y) = 0.0f;
-            old_velocity(x, y) = float2{0.0f, 0.0f};
+            old_velocity[x + y * nx] = float2{0.0f, 0.0f};
         }
     }
 }
@@ -353,12 +372,12 @@ void on_frame(GLuint& texture) {
         float r = 1.5f * f;
         float g = 1.5f * f3;
         float b = f3 * f3;
-        pixels(x, y) = rgba(r, g, b, 1.0);
+        pixels[x + y * nx] = rgba(r, g, b, 1.0);
     }
 
     // upload pixels to texture
 
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, nx, ny, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, nx, ny, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
 }
 
 void on_mouse_button(int x, int y) {
