@@ -45,10 +45,7 @@ T lerp(const T &a, const T &b, const U &u){
 
 template <typename T>
 const T& clamp(const T &x, const T &a, const T &b){
-    return
-        x < a ? a :
-        x > b ? b :
-        x;
+    return fminf(b, fmaxf(x, a));
 }
 
 template <typename T, typename U>
