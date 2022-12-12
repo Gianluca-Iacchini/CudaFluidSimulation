@@ -3,7 +3,7 @@
 	Shader class from learnopengl.com
 	https://learnopengl.com/Getting-started/Shaders
 */
-#include "../../../Include/glad/glad.h"
+#include <glad/glad.h>
 #include <iostream>
 
 

@@ -1,6 +1,6 @@
-#include "../../Include/glad/glad.h"
-#include "../../Include/GLFW/glfw3.h"
-#include "Shaders/Shader.h"
+#include <glad/glad.h>
+#include <GLFW/glfw3.h>
+#include <Shaders/Shader.h>
 #include <iostream>
 #include "test.cuh"
 #include "cpuFluidSim.h"

@@ -2,7 +2,7 @@
 #include <math.h>
 #include <cuda_gl_interop.h>
 #include <surface_functions.h>
-#include "../../Include/helper_math.h"
+#include <helper_math.h>
 
 #define CLAMP(val, minv, maxv) fminf(maxv, fmaxf(minv, val))
 #define MIX(v0, v1, t) v0 * (1.f - t) + v1 * t 

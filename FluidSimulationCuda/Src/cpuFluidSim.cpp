@@ -1,7 +1,7 @@
 #include "cpuFluidSim.h"
 #include <algorithm>
-#include "../../Include/vec2.h"
-#include "../../Include/helper_math.h"
+#include <vec2.h>
+#include <helper_math.h>
 
 
 
