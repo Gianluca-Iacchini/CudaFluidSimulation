@@ -3,6 +3,10 @@
 #include <cuda_gl_interop.h>
 #include <surface_functions.h>
 #include "../../Include/helper_math.h"
+#include "cuda_runtime.h"
+#include "device_launch_parameters.h"
+#include "cuda_runtime_api.h"
+#include "cudart_platform.h"
 
 #define CLAMP(val, minv, maxv) fminf(maxv, fmaxf(minv, val))
 #define MIX(v0, v1, t) v0 * (1.f - t) + v1 * t 

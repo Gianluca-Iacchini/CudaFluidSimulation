@@ -1,8 +1,6 @@
 #include "cpuFluidSim.h"
 #include <algorithm>
 #include "../../Include/vec2.h"
-#include "../../Include/helper_math.h"
-
 
 
 #define CLAMP(val, minv, maxv) fminf(maxv, fmaxf(minv, val))
@@ -29,7 +27,7 @@ vec2f* new_velocity;
 float* old_density;
 float* new_density;
 
-uchar4* pixels;
+uint32_t* pixels;
 
 float* old_pressure;
 float* new_pressure;
@@ -58,7 +56,7 @@ void init(int width, int height, int scale) {
     new_density = new float[nx * ny];
     
 
-    pixels = new uchar4[nx * ny];
+    pixels = new uint32_t[nx * ny];
 
     old_pressure = new float[nx * ny];
     new_pressure = new float[nx * ny];
@@ -339,15 +337,15 @@ uint32_t swap_bytes(uint32_t x, int i, int j) {
     return u.x;
 }
 
-uchar4 rgba32(uint32_t r, uint32_t g, uint32_t b, uint32_t a) {
+uint32_t rgba32(uint32_t r, uint32_t g, uint32_t b, uint32_t a) {
     r = clamp(r, 0u, 255u);
     g = clamp(g, 0u, 255u);
     b = clamp(b, 0u, 255u);
     a = clamp(a, 0u, 255u);
-    return make_uchar4(r, g, b, a);//(a << 24) | (b << 16) | (g << 8) | r;
+    return (a << 24) | (b << 16) | (g << 8) | r;
 }
 
-uchar4 rgba(float r, float g, float b, float a) {
+uint32_t rgba(float r, float g, float b, float a) {
     return rgba32(r * 256, g * 256, b * 256, a * 256);
 }
 

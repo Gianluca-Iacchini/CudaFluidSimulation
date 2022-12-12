@@ -6,7 +6,7 @@
 #include "cpuFluidSim.h"
 #include <string>
 
-#define GPU_SIM 1
+#define GPU_SIM 0
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 void processInput(GLFWwindow* window);

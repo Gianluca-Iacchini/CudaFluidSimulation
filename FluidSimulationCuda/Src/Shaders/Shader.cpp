@@ -3,9 +3,7 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
-#include <windows.h>
 #include <string>
-#include <filesystem>
 
 /*
 	Shader class from learnopengl.com
