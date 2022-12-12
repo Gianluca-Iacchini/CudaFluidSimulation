@@ -4,11 +4,10 @@
 #include "cuda_runtime_api.h"
 #include "cudart_platform.h"
 
-#include <algorithm>
 #include <iostream>
-#include <cstdlib>
 
-#include <glad/glad.h>
+
+#include "../../Include/glad/glad.h"
 
 void cudaInit(size_t x, size_t y, int scale, GLuint texture);
 void computeField(float dt, int x1pos, int y1pos, int x2pos, int y2pos, bool isPressed);

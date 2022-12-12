@@ -1,7 +1,7 @@
 #pragma once
 
 #include <math.h>
-#include <glad/glad.h>
+#include "../../Include/glad/glad.h"
 
 
 

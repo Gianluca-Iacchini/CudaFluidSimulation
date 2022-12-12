@@ -40,9 +40,6 @@
     <ClInclude Include="Src\cpuFluidSim.h">
       <Filter>Src</Filter>
     </ClInclude>
-    <ClInclude Include="Src\fluid_types.h">
-      <Filter>Src</Filter>
-    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <None Include="Src\Shaders\Programs\test_shader.frag">

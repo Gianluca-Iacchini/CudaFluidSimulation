@@ -1,19 +1,26 @@
-#include <glad/glad.h>
-#include <GLFW/glfw3.h>
-#include <Shaders/Shader.h>
+#include "../../Include/glad/glad.h"
+#include "../../Include/GLFW/glfw3.h"
+#include "Shaders/Shader.h"
 #include <iostream>
-#include <test.cuh>
-#include <cpuFluidSim.h>
-#include <vector>
+#include "test.cuh"
+#include "cpuFluidSim.h"
 #include <string>
+
+#define GPU_SIM 1
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 void processInput(GLFWwindow* window);
 
 // settings
+#if GPU_SIM
+const unsigned int SCR_WIDTH = 1920;
+const unsigned int SCR_HEIGHT = 1080;
+const int SCALE = 2;
+#else
 const unsigned int SCR_WIDTH = 1024;
 const unsigned int SCR_HEIGHT = 1024;
 const int SCALE = 8;
+#endif
 
 float vertices[] = {
 	-1.0f, -1.0f, 1.0f, -1.0f,
@@ -37,8 +44,6 @@ double lastYPos = 0.0f;
 
 int main()
 {
-
-
 	glfwInit();
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
@@ -93,8 +98,11 @@ int main()
 
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, SCR_WIDTH / SCALE, SCR_HEIGHT / SCALE, 0, GL_RGBA, GL_UNSIGNED_BYTE, 0);
 
-	//cudaInit(SCR_WIDTH, SCR_HEIGHT, SCALE, texture);
+#if GPU_SIM
+	cudaInit(SCR_WIDTH, SCR_HEIGHT, SCALE, texture);
+#else
 	init(SCR_WIDTH, SCR_HEIGHT, SCALE);
+#endif // GPU_SIM
 
 	float deltaTime = 0.f;
 	float lastTime = 0.0f;
@@ -123,10 +131,11 @@ int main()
 
 		processInput(window);
 
-		
-		//computeField(deltaTime, xPos/SCALE, (SCR_HEIGHT - yPos)/SCALE, lastXPos/SCALE, (SCR_HEIGHT - (lastYPos))/SCALE, isPressed);
+#if GPU_SIM
+		computeField(deltaTime, xPos/SCALE, (SCR_HEIGHT - yPos)/SCALE, lastXPos/SCALE, (SCR_HEIGHT - (lastYPos))/SCALE, isPressed);
+#else
 		on_frame(texture, deltaTime, isPressed);
-
+#endif
 		glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT);
 
@@ -165,14 +174,18 @@ void processInput(GLFWwindow* window)
 			glfwGetCursorPos(window, &xPos, &yPos);
 			lastXPos = xPos;
 			lastYPos = yPos;
+#if !GPU_SIM
 			on_mouse_button(xPos, yPos);
+#endif // GPU_SIM
 		}
 		else
 		{
 			lastXPos = xPos;
 			lastYPos = yPos;
 			glfwGetCursorPos(window, &xPos, &yPos);
+#if !GPU_SIM
 			on_mouse_button(xPos, yPos);
+#endif
 		}
 
 		isPressed = true;
