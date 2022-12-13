@@ -1,8 +1,6 @@
 #include "test.cuh"
 #include <math.h>
-#include <cuda_gl_interop.h>
 #include <surface_functions.h>
-#include "../../Include/helper_math.h"
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 #include "cuda_runtime_api.h"
@@ -90,7 +88,7 @@ cudaSurfaceObject_t surfObj;
 cudaResourceDesc resourceDesc;
 
 // inits all buffers, must be called before computeField function call
-void cudaInit(size_t x, size_t y, int scale, GLuint texture)
+void cudaInit(size_t x, size_t y, int scale)
 {
 	setConfig();
 
@@ -109,7 +107,6 @@ void cudaInit(size_t x, size_t y, int scale, GLuint texture)
 	config.radius /= (scale * scale);
 
 	cudaSetDevice(0);
-	cudaGLSetGLDevice(0);
 
 	cudaMalloc(&colorField, xSize * ySize * sizeof(uchar4));
 	cudaMalloc(&oldField, xSize * ySize * sizeof(Particle));
@@ -118,19 +115,6 @@ void cudaInit(size_t x, size_t y, int scale, GLuint texture)
 	cudaMalloc(&pressureNew, xSize * ySize * sizeof(float));
 	cudaMalloc(&vorticityField, xSize * ySize * sizeof(float));
 	cudaMalloc(&divergenceField, xSize * ySize * sizeof(float));
-
-
-	cudaError_t cgError = cudaGraphicsGLRegisterImage(&textureResource, texture, GL_TEXTURE_2D, cudaGraphicsMapFlagsWriteDiscard);
-
-
-	memset(&resourceDesc, 0, sizeof(resourceDesc));
-	resourceDesc.resType = cudaResourceTypeArray;
-
-	cudaGraphicsMapResources(1, &textureResource);
-	cudaGraphicsSubResourceGetMappedArray(&textureArray, textureResource, 0, 0);
-
-	resourceDesc.res.array.array = textureArray;
-	cudaCreateSurfaceObject(&surfObj, &resourceDesc);
 }
 
 // releases all buffers, must be called on program exit
@@ -381,15 +365,6 @@ __global__ void applyBloom(uchar4* colorField, size_t xSize, size_t ySize, int x
 	colorField[y * xSize + x] = make_uchar4(fminf(255.0f, R + maxval * e), fminf(255.0f, G + maxval * e), fminf(255.0f, B + maxval * e), 255);
 }
 
-__global__ void writeToTexture(cudaSurfaceObject_t surface, uchar4* colorField, size_t xSize, size_t ySize)
-{
-	int x = blockIdx.x * blockDim.x + threadIdx.x;
-	int y = blockIdx.y * blockDim.y + threadIdx.y;
-	if (x < xSize && y < ySize) {
-		surf2Dwrite(colorField[y * xSize + x], surface, x*sizeof(uchar4), y);
-	}
-}
-
 // performs several iterations over velocity and color fields
 void computeDiffusion(dim3 numBlocks, dim3 threadsPerBlock, float dt)
 {
@@ -415,7 +390,7 @@ void computePressure(dim3 numBlocks, dim3 threadsPerBlock, float dt)
 }
 
 // main function, calls vorticity -> diffusion -> force -> pressure -> project -> advect -> paint -> bloom
-void computeField(float dt, int x1pos, int y1pos, int x2pos, int y2pos, bool isPressed)
+void computeField(uchar4* result, float dt, int x1pos, int y1pos, int x2pos, int y2pos, bool isPressed)
 {
 	dim3 threadsPerBlock(sConfig.xThreads, sConfig.yThreads);
 	dim3 numBlocks(xSize / threadsPerBlock.x, ySize / threadsPerBlock.y);
@@ -475,7 +450,9 @@ void computeField(float dt, int x1pos, int y1pos, int x2pos, int y2pos, bool isP
 		applyBloom <<<numBlocks, threadsPerBlock >> > (colorField, xSize, ySize, x2pos, y2pos, config.radius, config.bloomIntense);
 	}
 
-	writeToTexture << <numBlocks, threadsPerBlock >> > (surfObj, colorField, xSize, ySize);
+	
+	cudaDeviceSynchronize();
+	cudaMemcpy(result, colorField, xSize * ySize * sizeof(uchar4), cudaMemcpyDeviceToHost);
 
 	cudaError_t error = cudaGetLastError();
 	if (error != cudaSuccess)

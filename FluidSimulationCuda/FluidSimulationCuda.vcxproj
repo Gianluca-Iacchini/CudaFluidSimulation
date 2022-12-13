@@ -53,7 +53,7 @@
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <SubSystem>Console</SubSystem>
-      <AdditionalDependencies>cudart_static.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;glfw3.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>cudart_static.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>cudadevrt.lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <CudaCompile>
@@ -85,18 +85,11 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Src\cpuFluidSim.cpp" />
-    <ClCompile Include="Src\glad.c" />
     <ClCompile Include="Src\Main.cpp" />
-    <ClCompile Include="Src\Shaders\Shader.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Src\cpuFluidSim.h" />
-    <ClInclude Include="Src\Shaders\Shader.h" />
     <ClInclude Include="Src\test.cuh" />
-  </ItemGroup>
-  <ItemGroup>
-    <None Include="Src\Shaders\Programs\test_shader.frag" />
-    <None Include="Src\Shaders\Programs\test_shader.vert" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

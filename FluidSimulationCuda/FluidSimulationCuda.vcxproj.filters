@@ -12,19 +12,10 @@
     <Filter Include="Src\Shaders">
       <UniqueIdentifier>{1170b7c6-4cf9-440d-9f93-fb9728609dd0}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Src\Shaders\Programs">
-      <UniqueIdentifier>{88cc1243-bc1d-4637-bc20-b65f535a7a63}</UniqueIdentifier>
-    </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="Src\glad.c">
-      <Filter>Src</Filter>
-    </ClCompile>
     <ClCompile Include="Src\Main.cpp">
       <Filter>Src</Filter>
-    </ClCompile>
-    <ClCompile Include="Src\Shaders\Shader.cpp">
-      <Filter>Src\Shaders</Filter>
     </ClCompile>
     <ClCompile Include="Src\cpuFluidSim.cpp">
       <Filter>Src</Filter>
@@ -34,19 +25,8 @@
     <ClInclude Include="Src\test.cuh">
       <Filter>Src</Filter>
     </ClInclude>
-    <ClInclude Include="Src\Shaders\Shader.h">
-      <Filter>Src\Shaders</Filter>
-    </ClInclude>
     <ClInclude Include="Src\cpuFluidSim.h">
       <Filter>Src</Filter>
     </ClInclude>
-  </ItemGroup>
-  <ItemGroup>
-    <None Include="Src\Shaders\Programs\test_shader.frag">
-      <Filter>Src\Shaders\Programs</Filter>
-    </None>
-    <None Include="Src\Shaders\Programs\test_shader.vert">
-      <Filter>Src\Shaders\Programs</Filter>
-    </None>
   </ItemGroup>
 </Project>
