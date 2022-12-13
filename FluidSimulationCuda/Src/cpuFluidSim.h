@@ -2,6 +2,7 @@
 
 #include <math.h>
 #include <stdint.h>
+#include "../../Include/helper_math.h"
 
 
 void init(int width, int height, int scale);

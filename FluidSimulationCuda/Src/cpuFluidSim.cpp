@@ -27,7 +27,7 @@ vec2f* new_velocity;
 float* old_density;
 float* new_density;
 
-uint32_t* pixels;
+uchar4* pixels;
 
 float* old_pressure;
 float* new_pressure;
@@ -56,7 +56,7 @@ void init(int width, int height, int scale) {
     new_density = new float[nx * ny];
     
 
-    pixels = new uint32_t[nx * ny];
+    pixels = new uchar4[nx * ny];
 
     old_pressure = new float[nx * ny];
     new_pressure = new float[nx * ny];
@@ -337,19 +337,19 @@ uint32_t swap_bytes(uint32_t x, int i, int j) {
     return u.x;
 }
 
-uint32_t rgba32(uint32_t r, uint32_t g, uint32_t b, uint32_t a) {
+uchar4 rgba32(uint32_t r, uint32_t g, uint32_t b, uint32_t a) {
     r = clamp(r, 0u, 255u);
     g = clamp(g, 0u, 255u);
     b = clamp(b, 0u, 255u);
     a = clamp(a, 0u, 255u);
-    return (a << 24) | (b << 16) | (g << 8) | r;
+    return make_uchar4(r, g, b, a);//(a << 24) | (b << 16) | (g << 8) | r;
 }
 
-uint32_t rgba(float r, float g, float b, float a) {
+uchar4 rgba(float r, float g, float b, float a) {
     return rgba32(r * 256, g * 256, b * 256, a * 256);
 }
 
-void on_frame(uint32_t* data, float dt, bool isPressed) {
+void on_frame(uchar4* data, float dt, bool isPressed) {
 
 
     on_mouse_button((w - 500) * (cos(total_time) /2 + 0.5f), (h - 500) * (sin(total_time) / 2 + 0.5f));
@@ -369,7 +369,7 @@ void on_frame(uint32_t* data, float dt, bool isPressed) {
         pixels[x + y * nx] = rgba(r, g, b, 1.0);
     }
 
-    memcpy(data, pixels, nx * ny * sizeof(uint32_t));
+    memcpy(data, pixels, nx * ny * sizeof(uchar4));
     // upload pixels to texture
 
     //glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, nx, ny, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);

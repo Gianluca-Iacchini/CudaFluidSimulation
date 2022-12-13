@@ -95,9 +95,17 @@ int main()
 //
 //	}
 
-	uint32_t* data = (uint32_t*)malloc((SCR_WIDTH / SCALE) * (SCR_HEIGHT / SCALE) * sizeof(uint32_t));
-	on_frame(data, deltaTime, isPressed);
-	std::cout.write(reinterpret_cast<char*>(data), (SCR_WIDTH / SCALE)* (SCR_HEIGHT / SCALE) * 4);
+	unsigned char* data = new unsigned char[(SCR_WIDTH / SCALE) * (SCR_HEIGHT / SCALE) * 4];
+	//on_frame(data, deltaTime, isPressed);
+	for (int j = 0; j < (SCR_WIDTH / SCALE) * (SCR_HEIGHT / SCALE) * 4; j += 4)
+	{
+		data[j] = 255;
+		data[j + 1] = 128;
+		data[j + 2] = 0;
+		data[j + 3] = 0;
+	}
+	for (int i = 0; i < 100; i++)
+		std::cout.write(reinterpret_cast<char*>(data), (SCR_WIDTH / SCALE) * (SCR_HEIGHT / SCALE) * 4);
 
 
 	cudaExit();
