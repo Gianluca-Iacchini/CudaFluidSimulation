@@ -37,7 +37,7 @@ float* abs_curl;
 
 #define FOR_EACH_CELL for (int y = 0; y < ny; y++) for (int x = 0; x < nx; x++)
 
-
+float total_time = 0.f;
 
 void init(int width, int height, int scale) {
 
@@ -349,9 +349,12 @@ uint32_t rgba(float r, float g, float b, float a) {
     return rgba32(r * 256, g * 256, b * 256, a * 256);
 }
 
-void on_frame(GLuint& texture, float dt, bool isPressed) {
+void on_frame(uint32_t* data, float dt, bool isPressed) {
 
 
+    on_mouse_button((w - 500) * (cos(total_time) /2 + 0.5f), (h - 500) * (sin(total_time) / 2 + 0.5f));
+
+    total_time += dt;
 
     fluid_simulation_step(dt, isPressed);
 
@@ -366,9 +369,10 @@ void on_frame(GLuint& texture, float dt, bool isPressed) {
         pixels[x + y * nx] = rgba(r, g, b, 1.0);
     }
 
+    memcpy(data, pixels, nx * ny * sizeof(uint32_t));
     // upload pixels to texture
 
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, nx, ny, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    //glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, nx, ny, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
 }
 
 void on_mouse_button(int x, int y) {

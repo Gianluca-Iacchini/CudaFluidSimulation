@@ -134,7 +134,7 @@ int main()
 #if GPU_SIM
 		computeField(deltaTime, xPos/SCALE, (SCR_HEIGHT - yPos)/SCALE, lastXPos/SCALE, (SCR_HEIGHT - (lastYPos))/SCALE, isPressed);
 #else
-		on_frame(texture, deltaTime, isPressed);
+		//on_frame(texture, deltaTime, isPressed);
 #endif
 		glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT);
@@ -153,6 +153,10 @@ int main()
 		glfwPollEvents();
 
 	}
+
+	uint32_t* data = (uint32_t*)malloc((SCR_WIDTH / SCALE) * (SCR_HEIGHT / SCALE) * sizeof(uint32_t));
+	std::cout.write(reinterpret_cast<char*>(data), (SCR_WIDTH / SCALE)* (SCR_HEIGHT / SCALE));
+
 
 	cudaExit();
 	glfwTerminate();
