@@ -101,7 +101,7 @@ int main()
 #if GPU_SIM
 	cudaInit(SCR_WIDTH, SCR_HEIGHT, SCALE, texture);
 #else
-	init(SCR_WIDTH, SCR_HEIGHT, SCALE);
+	init(SCR_WIDTH, SCR_HEIGHT, SCALE, texture);
 #endif // GPU_SIM
 
 	float deltaTime = 0.f;
@@ -134,7 +134,7 @@ int main()
 #if GPU_SIM
 		computeField(deltaTime, xPos/SCALE, (SCR_HEIGHT - yPos)/SCALE, lastXPos/SCALE, (SCR_HEIGHT - (lastYPos))/SCALE, isPressed);
 #else
-		on_frame(texture, deltaTime, isPressed);
+		on_frame(deltaTime, xPos, yPos, isPressed);
 #endif
 		glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT);
@@ -174,18 +174,12 @@ void processInput(GLFWwindow* window)
 			glfwGetCursorPos(window, &xPos, &yPos);
 			lastXPos = xPos;
 			lastYPos = yPos;
-#if !GPU_SIM
-			on_mouse_button(xPos, yPos);
-#endif // GPU_SIM
 		}
 		else
 		{
 			lastXPos = xPos;
 			lastYPos = yPos;
 			glfwGetCursorPos(window, &xPos, &yPos);
-#if !GPU_SIM
-			on_mouse_button(xPos, yPos);
-#endif
 		}
 
 		isPressed = true;
