@@ -28,7 +28,7 @@ static struct SystemConfig
 	int velocityIterations = 20;
 	int pressureIterations = 30;
 	int xThreads = 16;
-	int yThreads = 32;
+	int yThreads = 16;
 } sConfig;
 
 
@@ -37,18 +37,18 @@ static float3 colorArray[colorArraySize];
 
 
 
-static float3* oldColor;
-static float3* newColor;
+static float2* velocityField;
+static float* pressureField;
+static float3* dyeColorField;
 
-static float2* oldVel;
-static float2* newVel;
-
-static uchar4* colorField;
-static size_t xSize, ySize;
-static float* pressureOld;
-static float* pressureNew;
 static float* vorticityField;
 static float* divergenceField;
+
+static uchar4* textureColorField;
+
+static size_t xSize, ySize;
+
+
 static float3 currentColor;
 static float elapsedTime = 0.0f;
 static float timeSincePress = 0.0f;
@@ -84,6 +84,14 @@ cudaArray* textureArray = 0;
 cudaSurfaceObject_t surfObj;
 cudaResourceDesc resourceDesc;
 
+__constant__ int xSize_d;
+__constant__ int ySize_d;
+
+__constant__ struct Config devConstants;
+
+cudaStream_t stream_0;
+cudaStream_t stream_1;
+
 // inits all buffers, must be called before computeField function call
 void cudaInit(size_t x, size_t y, int scale, GLuint texture)
 {
@@ -103,23 +111,30 @@ void cudaInit(size_t x, size_t y, int scale, GLuint texture)
 	xSize = x/scale, ySize = y/scale;
 	config.radius /= (scale * scale);
 
+
+
 	cudaSetDevice(0);
 	cudaGLSetGLDevice(0);
 
-	cudaMalloc(&colorField, xSize * ySize * sizeof(uchar4));
+	cudaMalloc(&textureColorField, xSize * ySize * sizeof(uchar4));
 
-	cudaMalloc(&oldColor, xSize * ySize * sizeof(float3));
-	cudaMalloc(&newColor, xSize * ySize * sizeof(float3));
-	cudaMalloc(&oldVel, xSize * ySize * sizeof(float2));
-	cudaMalloc(&newVel, xSize * ySize * sizeof(float2));
+	cudaMalloc(&dyeColorField, xSize * ySize * sizeof(float3));
+	cudaMalloc(&velocityField, xSize * ySize * sizeof(float2));
 
 
-	cudaMalloc(&pressureOld, xSize * ySize * sizeof(float));
-	cudaMalloc(&pressureNew, xSize * ySize * sizeof(float));
+	cudaMalloc(&pressureField, xSize * ySize * sizeof(float));
 	cudaMalloc(&vorticityField, xSize * ySize * sizeof(float));
 	cudaMalloc(&divergenceField, xSize * ySize * sizeof(float));
 
-	
+	int xs = xSize;
+	int ys = ySize;
+
+	cudaStreamCreate(&stream_0);
+	cudaStreamCreate(&stream_1);
+
+	cudaMemcpyToSymbol(xSize_d, &xs, sizeof(int));
+	cudaMemcpyToSymbol(ySize_d, &ys, sizeof(int));
+	cudaMemcpyToSymbol(devConstants, &config, sizeof(Config));
 
 	cudaError_t cgError = cudaGraphicsGLRegisterImage(&textureResource, texture, GL_TEXTURE_2D, cudaGraphicsMapFlagsWriteDiscard);
 
@@ -137,19 +152,16 @@ void cudaInit(size_t x, size_t y, int scale, GLuint texture)
 // releases all buffers, must be called on program exit
 void cudaExit()
 {
-	cudaFree(oldVel);
-	cudaFree(newVel);
-	cudaFree(oldColor);
-	cudaFree(newColor);
-	cudaFree(colorField);
-	cudaFree(pressureOld);
-	cudaFree(pressureNew);
+	cudaFree(velocityField);
+	cudaFree(dyeColorField);
+	cudaFree(textureColorField);
+	cudaFree(pressureField);
 	cudaFree(vorticityField);
 	cudaFree(divergenceField);
 }
 
 // interpolates quantity of grid cells
-__device__ float2 interpolate(float2 v, float2* vel, size_t xSize, size_t ySize)
+__device__ float2 interpolate(float2 v, float2* vel)
 {
 	float x1 = (int)v.x;
 	float y1 = (int)v.y;
@@ -158,10 +170,10 @@ __device__ float2 interpolate(float2 v, float2* vel, size_t xSize, size_t ySize)
 	
 	float2 v1, v2, v3, v4;
 
-	v1 = vel[int(CLAMP(y1, 0.0f, ySize - 1.0f)) * xSize + int(CLAMP(x1, 0.0f, xSize - 1.0f))];
-	v2 = vel[int(CLAMP(y1, 0.0f, ySize - 1.0f)) * xSize + int(CLAMP(x2, 0.0f, xSize - 1.0f))];
-	v3 = vel[int(CLAMP(y2, 0.0f, ySize - 1.0f)) * xSize + int(CLAMP(x1, 0.0f, xSize - 1.0f))];
-	v4 = vel[int(CLAMP(y2, 0.0f, ySize - 1.0f)) * xSize + int(CLAMP(x2, 0.0f, xSize - 1.0f))];
+	v1 = vel[int(CLAMP(y1, 0.0f, ySize_d - 1.0f)) * xSize_d + int(CLAMP(x1, 0.0f, xSize_d - 1.0f))];
+	v2 = vel[int(CLAMP(y1, 0.0f, ySize_d - 1.0f)) * xSize_d + int(CLAMP(x2, 0.0f, xSize_d - 1.0f))];
+	v3 = vel[int(CLAMP(y2, 0.0f, ySize_d - 1.0f)) * xSize_d + int(CLAMP(x1, 0.0f, xSize_d - 1.0f))];
+	v4 = vel[int(CLAMP(y2, 0.0f, ySize_d - 1.0f)) * xSize_d + int(CLAMP(x2, 0.0f, xSize_d - 1.0f))];
 
 
 	float tx = (v.x - x1) / (x2 - x1);
@@ -175,7 +187,7 @@ __device__ float2 interpolate(float2 v, float2* vel, size_t xSize, size_t ySize)
 
 
 // interpolates quantity of grid cells
-__device__ float3 interpolate(float2 v, float3* col, size_t xSize, size_t ySize)
+__device__ float3 interpolate(float2 v, float3* col)
 {
 	float x1 = (int)v.x;
 	float y1 = (int)v.y;
@@ -184,10 +196,10 @@ __device__ float3 interpolate(float2 v, float3* col, size_t xSize, size_t ySize)
 
 	float3 c1, c2, c3, c4;
 
-	c1 = col[int(CLAMP(y1, 0.0f, ySize - 1.0f)) * xSize + int(CLAMP(x1, 0.0f, xSize - 1.0f))];
-	c2 = col[int(CLAMP(y1, 0.0f, ySize - 1.0f)) * xSize + int(CLAMP(x2, 0.0f, xSize - 1.0f))];
-	c3 = col[int(CLAMP(y2, 0.0f, ySize - 1.0f)) * xSize + int(CLAMP(x1, 0.0f, xSize - 1.0f))];
-	c4 = col[int(CLAMP(y2, 0.0f, ySize - 1.0f)) * xSize + int(CLAMP(x2, 0.0f, xSize - 1.0f))];
+	c1 = col[int(CLAMP(y1, 0.0f, ySize_d - 1.0f)) * xSize_d + int(CLAMP(x1, 0.0f, xSize_d - 1.0f))];
+	c2 = col[int(CLAMP(y1, 0.0f, ySize_d - 1.0f)) * xSize_d + int(CLAMP(x2, 0.0f, xSize_d - 1.0f))];
+	c3 = col[int(CLAMP(y2, 0.0f, ySize_d - 1.0f)) * xSize_d + int(CLAMP(x1, 0.0f, xSize_d - 1.0f))];
+	c4 = col[int(CLAMP(y2, 0.0f, ySize_d - 1.0f)) * xSize_d + int(CLAMP(x2, 0.0f, xSize_d - 1.0f))];
 
 
 	float tx = (v.x - x1) / (x2 - x1);
@@ -202,142 +214,257 @@ __device__ float3 interpolate(float2 v, float3* col, size_t xSize, size_t ySize)
 }
 
 // computes divergency of velocity field
-__global__ void computeDivergence(float* divergenceField, float2* vel, size_t xSize, size_t ySize)
+__global__ void computeDivergence(float* divergenceField, float2* vel)
 {
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
 	int y = blockIdx.y * blockDim.y + threadIdx.y;
 
 	float2 vL, vR, vB, vT;
 
-	vL = vel[int(CLAMP(y, 0.0f, ySize - 1.0f)) * xSize + int(CLAMP(x - 1, 0.0f, xSize - 1.0f))];
-	vR = vel[int(CLAMP(y, 0.0f, ySize - 1.0f)) * xSize + int(CLAMP(x + 1, 0.0f, xSize - 1.0f))];
-	vB = vel[int(CLAMP(y - 1, 0.0f, ySize - 1.0f)) * xSize + int(CLAMP(x, 0.0f, xSize - 1.0f))];
-	vT = vel[int(CLAMP(y + 1, 0.0f, ySize - 1.0f)) * xSize + int(CLAMP(x, 0.0f, xSize - 1.0f))];
+	vL = vel[y * xSize_d + int(CLAMP(x - 1, 0.0f, xSize_d - 1.0f))];
+	vR = vel[y * xSize_d + int(CLAMP(x + 1, 0.0f, xSize_d - 1.0f))];
+	vB = vel[int(CLAMP(y - 1, 0.0f, ySize_d - 1.0f)) * xSize_d + x];
+	vT = vel[int(CLAMP(y + 1, 0.0f, ySize_d - 1.0f)) * xSize_d + x];
 
-	divergenceField[y * xSize + x] = 0.5f * (vR.x - vL.x + vT.y - vB.y);
+	divergenceField[y * xSize_d + x] = 0.5f * (vR.x - vL.x + vT.y - vB.y);
 }
 
 
 // adds quantity to particles using bilinear interpolation
-__global__ void advect(float2* newVel, float2* oldVel, size_t xSize, size_t ySize, float dDiffusion, float dt)
+__global__ void advect(float2* oldVel, float dt)
 {
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
 	int y = blockIdx.y * blockDim.y + threadIdx.y;
-	float decay = 1.0f / (1.0f + dDiffusion * dt);
+	float decay = 1.0f / (1.0f + devConstants.densityDiffusion * dt);
 	float2 pos = { x * 1.0f, y * 1.0f };
-	float2& oldV = oldVel[y * xSize + x];
+	float2& oldV = oldVel[y * xSize_d + x];
 	// find new particle tracing where it came from
-	float2 vLerp = interpolate(pos - oldV * dt, oldVel, xSize, ySize);
+	float2 vLerp = interpolate(pos - oldV * dt, oldVel);
 	vLerp  = vLerp * decay;
-	newVel[y * xSize + x] = vLerp;
+
+	__syncthreads();
+	oldVel[y * xSize_d + x] = vLerp;
 }
 
 // adds quantity to particles using bilinear interpolation
-__global__ void advect(float3* newColor, float3* oldColor, float2* vel, size_t xSize, size_t ySize, float dDiffusion, float dt)
+__global__ void advect(float3* oldColor, float2* vel, float dt)
 {
+
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
 	int y = blockIdx.y * blockDim.y + threadIdx.y;
-	float decay = 1.0f / (1.0f + dDiffusion * dt);
+
+	float decay = 1.0f / (1.0f + devConstants.densityDiffusion * dt);
 	float2 pos = { x * 1.0f, y * 1.0f };
-	float2& oldV = vel[y * xSize + x];
+	float2& oldV = vel[y * xSize_d + x];
 	// find new particle tracing where it came from
-	float3 cLerp = interpolate(pos - oldV * dt, oldColor,  xSize, ySize);
+	float3 cLerp = interpolate(pos - oldV * dt, oldColor);
 	
 	cLerp.x = fminf(1.0f, pow(cLerp.x, 1.005f) * decay);
 	cLerp.y = fminf(1.0f, pow(cLerp.y, 1.005f) * decay);
 	cLerp.z = fminf(1.0f, pow(cLerp.z, 1.005f) * decay);
-	newColor[y * xSize + x] = cLerp;
+
+	__syncthreads();
+	oldColor[y * xSize_d + x] = cLerp;
 }
 
 // calculates color field diffusion
-__global__ void diffuseCol(float3* newColor, float3* oldColor, size_t xSize, size_t ySize, float cDiffusion, float dt)
+__global__ void diffuseCol(float3* oldColor, float dt)
 {
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
 	int y = blockIdx.y * blockDim.y + threadIdx.y;
+	int RADIUS = 1;
+	int BmR = 15;
+	__shared__ float3 colorShared[18][18];
 
-	float alpha = cDiffusion * cDiffusion / dt;
+	if (threadIdx.y < RADIUS)
+	{
+		colorShared[threadIdx.y][threadIdx.x + RADIUS] = oldColor[int(CLAMP(y - 1, 0.0f, ySize_d - 1.0f)) * xSize_d + x];
+	}
+	else if (threadIdx.y >= BmR)
+	{
+		colorShared[threadIdx.y + 2 * RADIUS][threadIdx.x + RADIUS] = oldColor[int(CLAMP(y + 1, 0.0f, ySize_d - 1.0f)) * xSize_d + x];
+	}
+	if (threadIdx.x < RADIUS)
+	{
+		colorShared[threadIdx.y + RADIUS][threadIdx.x] = oldColor[y * xSize_d + int(CLAMP(x - 1, 0.0f, xSize_d - 1.0f))];
+	}
+	else if (threadIdx.x >= BmR)
+	{
+		colorShared[threadIdx.y + RADIUS][threadIdx.x + 2 * RADIUS] = oldColor[y * xSize_d + int(CLAMP(x + 1, 0.0f, xSize_d - 1.0f))];
+	}
+
+	colorShared[threadIdx.y + RADIUS][threadIdx.x + RADIUS] = oldColor[y * xSize_d + x];
+
+	__syncthreads();
+
+	float alpha = devConstants.colorDiffusion * devConstants.colorDiffusion/ dt;
 	float beta = 4.0f + alpha;
 
 	float3 cL, cR, cB, cT, cC;
-	cL = oldColor[int(CLAMP(y, 0.0f, ySize - 1.0f)) * xSize + int(CLAMP(x - 1, 0.0f, xSize - 1.0f))];
-	cR = oldColor[int(CLAMP(y, 0.0f, ySize - 1.0f)) * xSize + int(CLAMP(x + 1, 0.0f, xSize - 1.0f))];
-	cB = oldColor[int(CLAMP(y - 1, 0.0f, ySize - 1.0f)) * xSize + int(CLAMP(x, 0.0f, xSize - 1.0f))];
-	cT = oldColor[int(CLAMP(y + 1, 0.0f, ySize - 1.0f)) * xSize + int(CLAMP(x, 0.0f, xSize - 1.0f))];
-	cC = oldColor[y * xSize + x];
 
-	newColor[y * xSize + x] = (cL + cR + cB + cT + cC * alpha) * (1.f / beta);
+	for (int i = 0; i < 20; i++)
+	{
+		cL = colorShared[threadIdx.y + RADIUS][threadIdx.x + RADIUS - 1];
+		cR = colorShared[threadIdx.y + RADIUS][threadIdx.x + RADIUS + 1];
+		cB = colorShared[threadIdx.y + RADIUS - 1][threadIdx.x + RADIUS];
+		cT = colorShared[threadIdx.y + RADIUS + 1][threadIdx.x + RADIUS];
+		cC = colorShared[threadIdx.y + RADIUS][threadIdx.x + RADIUS];
 
-}
 
-// fills output image with corresponding color
-__global__ void paint(uchar4* colorField, float3* oldColor, size_t xSize, size_t ySize)
-{
-	int x = blockIdx.x * blockDim.x + threadIdx.x;
-	int y = blockIdx.y * blockDim.y + threadIdx.y;
+		float3 newValue = (cL + cR + cB + cT + cC * alpha) * (1.f / beta);
 
-	float R = oldColor[y * xSize + x].x;
-	float G = oldColor[y * xSize + x].y;
-	float B = oldColor[y * xSize + x].z;
 
-	colorField[y * xSize + x] = make_uchar4(fminf(255.0f, 255.0f * R), fminf(255.0f, 255.0f * G), fminf(255.0f, 255.0f * B), 255);
+		__syncthreads();
+
+		colorShared[threadIdx.y + RADIUS][threadIdx.x + RADIUS] = newValue;
+
+		__syncthreads();
+	}
+
+	oldColor[y * xSize_d + x] = colorShared[threadIdx.y + RADIUS][threadIdx.x + RADIUS];
+
 }
 
 // calculates nonzero divergency velocity field u
-__global__ void diffuseVel(float2* newVel, float2* oldVel, size_t xSize, size_t ySize, float vDiffusion, float dt)
+__global__ void diffuseVel(float2* oldVel, float dt)
 {
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
 	int y = blockIdx.y * blockDim.y + threadIdx.y;
+	int RADIUS = 1;
+	int BmR = 15;
+	__shared__ float2 velShared[18][18];
+
+	if (threadIdx.y < RADIUS)
+	{
+		velShared[threadIdx.y][threadIdx.x + RADIUS] = oldVel[int(CLAMP(y - 1, 0.0f, ySize_d - 1.0f)) * xSize_d + x];
+	}
+	else if (threadIdx.y >= BmR)
+	{
+		velShared[threadIdx.y + 2 * RADIUS][threadIdx.x + RADIUS] = oldVel[int(CLAMP(y + 1, 0.0f, ySize_d - 1.0f)) * xSize_d + x];
+	}
+	if (threadIdx.x < RADIUS)
+	{
+		velShared[threadIdx.y + RADIUS][threadIdx.x] = oldVel[y * xSize_d + int(CLAMP(x - 1, 0.0f, xSize_d - 1.0f))];
+	}
+	else if (threadIdx.x >= BmR)
+	{
+		velShared[threadIdx.y + RADIUS][threadIdx.x + 2 * RADIUS] = oldVel[y * xSize_d + int(CLAMP(x + 1, 0.0f, xSize_d - 1.0f))];
+	}
+
+	velShared[threadIdx.y + RADIUS][threadIdx.x + RADIUS] = oldVel[y * xSize_d + x];
+
+	__syncthreads();
+
 	float2 pos = { x * 1.0f, y * 1.0f };
 
 	// perfoms one iteration of jacobi method (diffuse method should be called 20-50 times per cell)
-	float alpha = vDiffusion * vDiffusion / dt;
+	float alpha = devConstants.velocityDiffusion * devConstants.velocityDiffusion / dt;
 	float beta = 4.0f + alpha;
 
 	float2 uL, uR, uB, uT, uC;
 
-	uL = oldVel[int(CLAMP(y, 0.0f, ySize - 1.0f)) * xSize + int(CLAMP(x - 1, 0.0f, xSize - 1.0f))];
-	uR = oldVel[int(CLAMP(y, 0.0f, ySize - 1.0f)) * xSize + int(CLAMP(x + 1, 0.0f, xSize - 1.0f))];
-	uB = oldVel[int(CLAMP(y - 1, 0.0f, ySize - 1.0f)) * xSize + int(CLAMP(x, 0.0f, xSize - 1.0f))];
-	uT = oldVel[int(CLAMP(y + 1, 0.0f, ySize - 1.0f)) * xSize + int(CLAMP(x, 0.0f, xSize - 1.0f))];
-	uC = oldVel[y * xSize + x];
+	for (int i = 0; i < 20; i++)
+	{
+		uL = velShared[threadIdx.y + RADIUS][threadIdx.x + RADIUS - 1];
+		uR = velShared[threadIdx.y + RADIUS][threadIdx.x + RADIUS + 1];
+		uB = velShared[threadIdx.y + RADIUS - 1][threadIdx.x + RADIUS];
+		uT = velShared[threadIdx.y + RADIUS + 1][threadIdx.x + RADIUS];
+		uC = velShared[threadIdx.y + RADIUS][threadIdx.x + RADIUS];
 
-	newVel[y * xSize + x] = (uT + uB + uL + uR + uC * alpha) * (1.f / beta);
+		float2 newValue = (uT + uB + uL + uR + uC * alpha) * (1.f / beta);
+
+
+		__syncthreads();
+
+		velShared[threadIdx.y + RADIUS][threadIdx.x + RADIUS] = newValue;
+
+		__syncthreads();
+	}
+
+
+	oldVel[y * xSize_d + x] = velShared[threadIdx.y + RADIUS][threadIdx.x + RADIUS];
+}
+
+// fills output image with corresponding color
+__global__ void paint(uchar4* colorField, float3* oldColor)
+{
+	int x = blockIdx.x * blockDim.x + threadIdx.x;
+	int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+	float R = oldColor[y * xSize_d + x].x;
+	float G = oldColor[y * xSize_d + x].y;
+	float B = oldColor[y * xSize_d + x].z;
+
+	colorField[y * xSize_d + x] = make_uchar4(fminf(255.0f, 255.0f * R), fminf(255.0f, 255.0f * G), fminf(255.0f, 255.0f * B), 255);
 }
 
 // performs iteration of jacobi method on pressure field
-__global__ void computePressureImpl(float* divergenceField, size_t xSize, size_t ySize, float* pNew, float* pOld, float dt)
+__global__ void computePressureImpl(float* divergenceField, float* pOld, float dt)
 {
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
 	int y = blockIdx.y * blockDim.y + threadIdx.y;
-	float div = divergenceField[y * xSize + x];
+	float div = divergenceField[y * xSize_d + x];
 
 	float pL, pR, pB, pT;
 
-	pL = pOld[int(CLAMP(y, 0.0f, ySize - 1.0f)) * xSize + int(CLAMP(x - 1, 0.0f, xSize - 1.0f))];
-	pR = pOld[int(CLAMP(y, 0.0f, ySize - 1.0f)) * xSize + int(CLAMP(x + 1, 0.0f, xSize - 1.0f))];
-	pB = pOld[int(CLAMP(y - 1, 0.0f, ySize - 1.0f)) * xSize + int(CLAMP(x, 0.0f, xSize - 1.0f))];
-	pT = pOld[int(CLAMP(y + 1, 0.0f, ySize - 1.0f)) * xSize + int(CLAMP(x, 0.0f, xSize - 1.0f))];
-	
+	int RADIUS = 1;
+	int BmR = 15;
+	__shared__ float pressureShared[18][18];
 
-	float pressure = (pL + pR + pB + pT - div) * 0.25f;
+	if (threadIdx.y < RADIUS)
+	{
+		pressureShared[threadIdx.y][threadIdx.x + RADIUS] = pOld[int(CLAMP(y - 1, 0.0f, ySize_d - 1.0f)) * xSize_d + x];
+	}
+	else if (threadIdx.y >= BmR)
+	{
+		pressureShared[threadIdx.y + 2 * RADIUS][threadIdx.x + RADIUS] = pOld[int(CLAMP(y + 1, 0.0f, ySize_d - 1.0f)) * xSize_d + x];
+	}
+	if (threadIdx.x < RADIUS)
+	{
+		pressureShared[threadIdx.y + RADIUS][threadIdx.x] = pOld[y * xSize_d + int(CLAMP(x - 1, 0.0f, xSize_d - 1.0f))];
+	}
+	else if (threadIdx.x >= BmR)
+	{
+		pressureShared[threadIdx.y + RADIUS][threadIdx.x + 2 * RADIUS] = pOld[y * xSize_d + int(CLAMP(x + 1, 0.0f, xSize_d - 1.0f))];
+	}
 
+	pressureShared[threadIdx.y + RADIUS][threadIdx.x + RADIUS] = pOld[y * xSize_d + x];
 
-	pNew[y * xSize + x] = pressure;
+	__syncthreads();
+
+	for (int i = 0; i < 30; i++)
+	{
+
+		pL = pressureShared[threadIdx.y + RADIUS][threadIdx.x + RADIUS - 1];
+		pR = pressureShared[threadIdx.y + RADIUS][threadIdx.x + RADIUS + 1];
+		pB = pressureShared[threadIdx.y + RADIUS - 1][threadIdx.x + RADIUS];
+		pT = pressureShared[threadIdx.y + RADIUS + 1][threadIdx.x + RADIUS];
+
+		float pressure = (pL + pR + pB + pT - div) * 0.25f;
+
+		__syncthreads();
+
+		pressureShared[threadIdx.y + RADIUS][threadIdx.x + RADIUS] = pressure;
+
+		__syncthreads();
+	}
+
+	pOld[y * xSize_d + x] = pressureShared[threadIdx.y + RADIUS][threadIdx.x + RADIUS];
 }
 
 // projects pressure field on velocity field
-__global__ void project(float2* oldVel, size_t xSize, size_t ySize, float* pField)
+__global__ void project(float2* oldVel, float* pField)
 {
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
 	int y = blockIdx.y * blockDim.y + threadIdx.y;
-	float2& u = oldVel[y * xSize + x];
+	float2& u = oldVel[y * xSize_d + x];
 
 	float pL, pR, pB, pT;
 
-	pL = pField[int(CLAMP(y, 0.0f, ySize - 1.0f)) * xSize + int(CLAMP(x - 1, 0.0f, xSize - 1.0f))];
-	pR = pField[int(CLAMP(y, 0.0f, ySize - 1.0f)) * xSize + int(CLAMP(x + 1, 0.0f, xSize - 1.0f))];
-	pB = pField[int(CLAMP(y - 1, 0.0f, ySize - 1.0f)) * xSize + int(CLAMP(x, 0.0f, xSize - 1.0f))];
-	pT = pField[int(CLAMP(y + 1, 0.0f, ySize - 1.0f)) * xSize + int(CLAMP(x, 0.0f, xSize - 1.0f))];
+	pL = pField[y * xSize_d + int(CLAMP(x - 1, 0.0f, xSize_d - 1.0f))];
+	pR = pField[y * xSize_d + int(CLAMP(x + 1, 0.0f, xSize_d - 1.0f))];
+	pB = pField[int(CLAMP(y - 1, 0.0f, ySize_d - 1.0f)) * xSize_d + x];
+	pT = pField[int(CLAMP(y + 1, 0.0f, ySize_d - 1.0f)) * xSize_d + x];
 
 	float2 subtractVel = { (pR - pL) * 0.5f, (pT - pB) * 0.5f };
 
@@ -346,16 +473,16 @@ __global__ void project(float2* oldVel, size_t xSize, size_t ySize, float* pFiel
 }
 
 // applies force and add color dye to the particle field
-__global__ void applyForce(float2* oldVel, float3* oldColor, size_t xSize, size_t ySize, float3 color, float2 F, float2 pos, int r, float dt)
+__global__ void applyForce(float2* oldVel, float3* oldColor, float3 color, float2 F, float2 pos, float dt)
 {
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
 	int y = blockIdx.y * blockDim.y + threadIdx.y;
 
-	float e = expf(-((x - pos.x) * (x - pos.x) + (y - pos.y) * (y - pos.y)) / r);
+	float e = expf(-((x - pos.x) * (x - pos.x) + (y - pos.y) * (y - pos.y)) / devConstants.radius);
 	float2 uF = F * dt * e;
 	
-	float2& u = oldVel[y * xSize + x];
-	float3& c = oldColor[y * xSize + x];
+	float2& u = oldVel[y * xSize_d + x];
+	float3& c = oldColor[y * xSize_d + x];
 	
 	u = u + uF;
 	c += color * e;
@@ -363,32 +490,30 @@ __global__ void applyForce(float2* oldVel, float3* oldColor, size_t xSize, size_
 
 
 // applies vorticity to velocity field
-__global__ void computeVorticity(float2* newVel, float2* oldVel, float* vField, size_t xSize, size_t ySize, float vorticity, float dt)
+__global__ void computeVorticity(float2* oldVel, float *vField, float dt)
 {
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
 	int y = blockIdx.y * blockDim.y + threadIdx.y;
 
-
 	float2 vL, vR, vB, vT;
 
-	vL = oldVel[int(CLAMP(y, 0.0f, ySize - 1.0f)) * xSize + int(CLAMP(x - 1, 0.0f, xSize - 1.0f))];
-	vR = oldVel[int(CLAMP(y, 0.0f, ySize - 1.0f)) * xSize + int(CLAMP(x + 1, 0.0f, xSize - 1.0f))];
-	vB = oldVel[int(CLAMP(y - 1, 0.0f, ySize - 1.0f)) * xSize + int(CLAMP(x, 0.0f, xSize - 1.0f))];
-	vT = oldVel[int(CLAMP(y + 1, 0.0f, ySize - 1.0f)) * xSize + int(CLAMP(x, 0.0f, xSize - 1.0f))];
 
-	vField[y * xSize + x] = 0.5f * (vR.y - vL.y - vT.x + vB.x);
+	vL = oldVel[y * xSize_d + int(CLAMP(x - 1, 0.0f, xSize_d - 1.0f))];
+	vR = oldVel[y * xSize_d + int(CLAMP(x + 1, 0.0f, xSize_d - 1.0f))];
+	vB = oldVel[int(CLAMP(y - 1, 0.0f, ySize_d - 1.0f)) * xSize_d + x];
+	vT = oldVel[int(CLAMP(y + 1, 0.0f, ySize_d - 1.0f)) * xSize_d + x];
+
+	vField[y * xSize_d + x] = 0.5f * (vR.y - vL.y - vT.x + vB.x);
 
 	__syncthreads();
 
-	float2& pOld = oldVel[y * xSize + x];
-	float2& pNew = newVel[y * xSize + x];
 
 
-	float vortL = vField[int(CLAMP(y, 0.0f, ySize - 1.0f)) * xSize + int(CLAMP(x - 1, 0.0f, xSize - 1.0f))];
-	float vortR = vField[int(CLAMP(y, 0.0f, ySize - 1.0f)) * xSize + int(CLAMP(x + 1, 0.0f, xSize - 1.0f))];
-	float vortB = vField[int(CLAMP(y - 1, 0.0f, ySize - 1.0f)) * xSize + int(CLAMP(x, 0.0f, xSize - 1.0f))];
-	float vortT = vField[int(CLAMP(y + 1, 0.0f, ySize - 1.0f)) * xSize + int(CLAMP(x, 0.0f, xSize - 1.0f))];
-	float vortC = vField[int(CLAMP(y, 0.0f, ySize - 1.0f)) * xSize + int(CLAMP(x, 0.0f, xSize - 1.0f))];
+	float vortL = vField[y * xSize_d + int(CLAMP(x - 1, 0.0f, xSize_d - 1.0f))];
+	float vortR = vField[y * xSize_d + int(CLAMP(x + 1, 0.0f, xSize_d - 1.0f))];
+	float vortB = vField[int(CLAMP(y - 1, 0.0f, ySize_d - 1.0f)) * xSize_d + x];
+	float vortT = vField[int(CLAMP(y + 1, 0.0f, ySize_d - 1.0f)) * xSize_d + x];
+	float vortC = vField[y * xSize_d + x];
 
 	float2 v = { (abs(vortT) - abs(vortB)) * 0.5f, (abs(vortL) - abs(vortR)) * 0.5f };
 
@@ -396,60 +521,38 @@ __global__ void computeVorticity(float2* newVel, float2* oldVel, float* vField, 
 
 	v = v * (1.0f / length);
 
-	v = v * vortC * vorticity;
-	pOld = pOld + v * dt;
-	pNew = pOld;
+	v = v * vortC * devConstants.vorticity;
+	float2 newVelValue = oldVel[y * xSize_d + x] + v * dt;
+	
+	__syncthreads();
+
+	oldVel[y * xSize_d + x] = newVelValue;
 }
 
 // adds flashlight effect near the mouse position
-__global__ void applyBloom(uchar4* colorField, size_t xSize, size_t ySize, int xpos, int ypos, float radius, float bloomIntense)
+__global__ void applyBloom(uchar4* colorField, int xpos, int ypos)
 {
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
 	int y = blockIdx.y * blockDim.y + threadIdx.y;
 
 
-	float e = bloomIntense * expf(-((x - xpos) * (x - xpos) + (y - ypos) * (y - ypos) + 1.0f) / (radius * radius));
+	float e = devConstants.bloomIntense * expf(-((x - xpos) * (x - xpos) + (y - ypos) * (y - ypos) + 1.0f) / (devConstants.radius * devConstants.radius));
 
-	unsigned char R = colorField[y * xSize + x].x;
-	unsigned char G = colorField[y * xSize + x].y;
-	unsigned char B = colorField[y * xSize + x].z;
+	unsigned char R = colorField[y * xSize_d + x].x;
+	unsigned char G = colorField[y * xSize_d + x].y;
+	unsigned char B = colorField[y * xSize_d + x].z;
 
 	float maxval = fmaxf(R, fmaxf(G, B));
 
-	colorField[y * xSize + x] = make_uchar4(fminf(255.0f, R + maxval * e), fminf(255.0f, G + maxval * e), fminf(255.0f, B + maxval * e), 255);
+	colorField[y * xSize_d + x] = make_uchar4(fminf(255.0f, R + maxval * e), fminf(255.0f, G + maxval * e), fminf(255.0f, B + maxval * e), 255);
 }
 
-__global__ void writeToTexture(cudaSurfaceObject_t surface, uchar4* colorField, size_t xSize, size_t ySize)
+__global__ void writeToTexture(cudaSurfaceObject_t surface, uchar4* colorField)
 {
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
 	int y = blockIdx.y * blockDim.y + threadIdx.y;
-	if (x < xSize && y < ySize) {
-		surf2Dwrite(colorField[y * xSize + x], surface, x*sizeof(uchar4), y);
-	}
-}
-
-// performs several iterations over velocity and color fields
-void computeDiffusion(dim3 numBlocks, dim3 threadsPerBlock, float dt)
-{
-	// diffuse velocity and color
-	for (int i = 0; i < sConfig.velocityIterations; i++)
-	{
-		diffuseVel <<<numBlocks, threadsPerBlock >> > (newVel, oldVel, xSize, ySize, config.velocityDiffusion, dt);
-		diffuseCol <<<numBlocks, threadsPerBlock >> > (newColor, oldColor, xSize, ySize, config.colorDiffusion, dt);
-		std::swap(newVel, oldVel);
-		std::swap(oldColor, newColor);
-	}
-}
-
-// performs several iterations over pressure field
-void computePressure(dim3 numBlocks, dim3 threadsPerBlock, float dt)
-{
-	computeDivergence << <numBlocks, threadsPerBlock >> > (divergenceField, oldVel, xSize, ySize);
-
-	for (int i = 0; i < sConfig.pressureIterations; i++)
-	{
-		computePressureImpl << <numBlocks, threadsPerBlock >> > (divergenceField, xSize, ySize, pressureNew, pressureOld, dt);
-		std::swap(pressureOld, pressureNew);
+	if (x < xSize_d && y < ySize_d) {
+		surf2Dwrite(colorField[y * xSize_d + x], surface, x*sizeof(uchar4), y);
 	}
 }
 
@@ -460,17 +563,17 @@ void computeField(float dt, int x1pos, int y1pos, int x2pos, int y2pos, bool isP
 	dim3 numBlocks(xSize / threadsPerBlock.x, ySize / threadsPerBlock.y);
 
 	// advect
-	advect << <numBlocks, threadsPerBlock >> > (newVel, oldVel, xSize, ySize, config.densityDiffusion, dt);
-	std::swap(newVel, oldVel);
-	advect << <numBlocks, threadsPerBlock >> > (newColor, oldColor, oldVel, xSize, ySize, config.densityDiffusion, dt);
-	std::swap(newColor, oldColor);
+	advect << <numBlocks, threadsPerBlock >> > (velocityField, dt);
+	
+	advect << <numBlocks, threadsPerBlock >> > (dyeColorField, velocityField, dt);
+
 
 	// curls and vortisity
-	computeVorticity <<<numBlocks, threadsPerBlock >> > (newVel, oldVel, vorticityField, xSize, ySize, config.vorticity, dt);
-	std::swap(newVel, oldVel);
+	computeVorticity <<<numBlocks, threadsPerBlock >> > (velocityField, vorticityField, dt);
 
 	// diffuse velocity and color
-	computeDiffusion(numBlocks, threadsPerBlock, dt);
+	diffuseVel << <numBlocks, threadsPerBlock, 0, stream_0 >> > (velocityField, dt);
+	diffuseCol << <numBlocks, threadsPerBlock, 0, stream_1 >> > (dyeColorField, dt);
 
 	// apply force
 	if (isPressed)
@@ -489,7 +592,9 @@ void computeField(float dt, int x1pos, int y1pos, int x2pos, int y2pos, bool isP
 		F.x = (x2pos - x1pos) * scale;
 		F.y = (y2pos - y1pos) * scale;
 		float2 pos = { x2pos * 1.0f, y2pos * 1.0f };
-		applyForce << <numBlocks, threadsPerBlock >> > (oldVel, oldColor, xSize, ySize, currentColor, F, pos, config.radius, dt);
+		cudaStreamSynchronize(stream_0);
+		cudaStreamSynchronize(stream_1);
+		applyForce << <numBlocks, threadsPerBlock >> > (velocityField, dyeColorField, currentColor, F, pos, dt);
 	}
 	else
 	{
@@ -497,24 +602,23 @@ void computeField(float dt, int x1pos, int y1pos, int x2pos, int y2pos, bool isP
 	}
 
 	// compute pressure
-	computePressure(numBlocks, threadsPerBlock, dt);
+	computeDivergence << <numBlocks, threadsPerBlock >> > (divergenceField, velocityField);
+	computePressureImpl << <numBlocks, threadsPerBlock >> > (divergenceField, pressureField, dt);
 
 	// project
-	project <<<numBlocks, threadsPerBlock >> > (oldVel, xSize, ySize, pressureOld);
-	cudaMemset(pressureOld, 0.0f, xSize * ySize * sizeof(float));
-
-
+	project <<<numBlocks, threadsPerBlock >> > (velocityField, pressureField);
+	cudaMemsetAsync(pressureField, 0.0f, xSize * ySize * sizeof(float));
 
 	// paint image
-	paint <<<numBlocks, threadsPerBlock >> > (colorField, oldColor, xSize, ySize);
+	paint <<<numBlocks, threadsPerBlock >> > (textureColorField, dyeColorField);
 
 	// apply bloom in mouse pos
 	if (config.bloomEnabled && timeSincePress < 5.0f)
 	{
-		applyBloom <<<numBlocks, threadsPerBlock >> > (colorField, xSize, ySize, x2pos, y2pos, config.radius, config.bloomIntense);
+		applyBloom <<<numBlocks, threadsPerBlock >> > (textureColorField, x2pos, y2pos);
 	}
 
-	writeToTexture << <numBlocks, threadsPerBlock >> > (surfObj, colorField, xSize, ySize);
+	writeToTexture << <numBlocks, threadsPerBlock >> > (surfObj, textureColorField);
 
 	cudaError_t error = cudaGetLastError();
 	if (error != cudaSuccess)

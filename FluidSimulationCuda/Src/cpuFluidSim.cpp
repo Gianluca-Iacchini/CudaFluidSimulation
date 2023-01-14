@@ -323,8 +323,6 @@ void fluid_simulation_step(float dt, float mouseX, float mouseY, bool isPressed)
 
     pressure_iteration();
 
-   // t.join();
-
     FOR_EACH_CELL{
     old_velocity[x + y * nx].x -= 0.5f * (old_pressure[int(CLAMP(x + 1, 0, nx - 1)) + nx * int(CLAMP(y, 0, ny - 1))] - old_pressure[int(CLAMP(x - 1, 0, nx - 1)) + nx * int(CLAMP(y, 0, ny - 1))]);
     old_velocity[x + y * nx].y -= 0.5f * (old_pressure[int(CLAMP(x, 0, nx - 1)) + nx * int(CLAMP(y + 1, 0, ny - 1))] - old_pressure[int(CLAMP(x, 0, nx - 1)) + nx * int(CLAMP(y - 1, 0, ny - 1))]);
@@ -363,6 +361,3 @@ void on_frame(float dt, float mouseX, float mouseY, bool isPressed) {
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, nx, ny, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
 }
 
-void on_mouse_button(int x, int y) {
-
-}
