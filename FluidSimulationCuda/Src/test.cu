@@ -5,6 +5,11 @@
 #include <helper_math.h>
 #include <GLFW/glfw3.h>
 
+#define N_THREADS 16
+#define SM_RADIUS 1
+#define BMR N_THREADS - SM_RADIUS
+#define SM_SIZE N_THREADS + 2 * SM_RADIUS
+
 #define CLAMP(val, minv, maxv) fminf(maxv, fmaxf(minv, val))
 #define MIX(v0, v1, t) v0 * (1.f - t) + v1 * t 
 
@@ -38,8 +43,8 @@ static struct SystemConfig
 {
 	int velocityIterations = 20;
 	int pressureIterations = 30;
-	int xThreads = 16;
-	int yThreads = 16;
+	int xThreads = N_THREADS;
+	int yThreads = N_THREADS;
 } sConfig;
 
 
@@ -293,28 +298,26 @@ __global__ void diffuseCol(float3* oldColor, float dt)
 {
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
 	int y = blockIdx.y * blockDim.y + threadIdx.y;
-	int RADIUS = 1;
-	int BmR = 15;
-	__shared__ float3 colorShared[18][18];
+	__shared__ float3 colorShared[SM_SIZE][SM_SIZE];
 
-	if (threadIdx.y < RADIUS)
+	if (threadIdx.y < SM_RADIUS)
 	{
-		colorShared[threadIdx.y][threadIdx.x + RADIUS] = oldColor[int(CLAMP(y - 1, 0.0f, ySize_d - 1.0f)) * xSize_d + x];
+		colorShared[threadIdx.y][threadIdx.x + SM_RADIUS] = oldColor[int(CLAMP(y - 1, 0.0f, ySize_d - 1.0f)) * xSize_d + x];
 	}
-	else if (threadIdx.y >= BmR)
+	else if (threadIdx.y >= BMR)
 	{
-		colorShared[threadIdx.y + 2 * RADIUS][threadIdx.x + RADIUS] = oldColor[int(CLAMP(y + 1, 0.0f, ySize_d - 1.0f)) * xSize_d + x];
+		colorShared[threadIdx.y + 2 * SM_RADIUS][threadIdx.x + SM_RADIUS] = oldColor[int(CLAMP(y + 1, 0.0f, ySize_d - 1.0f)) * xSize_d + x];
 	}
-	if (threadIdx.x < RADIUS)
+	if (threadIdx.x < SM_RADIUS)
 	{
-		colorShared[threadIdx.y + RADIUS][threadIdx.x] = oldColor[y * xSize_d + int(CLAMP(x - 1, 0.0f, xSize_d - 1.0f))];
+		colorShared[threadIdx.y + SM_RADIUS][threadIdx.x] = oldColor[y * xSize_d + int(CLAMP(x - 1, 0.0f, xSize_d - 1.0f))];
 	}
-	else if (threadIdx.x >= BmR)
+	else if (threadIdx.x >= BMR)
 	{
-		colorShared[threadIdx.y + RADIUS][threadIdx.x + 2 * RADIUS] = oldColor[y * xSize_d + int(CLAMP(x + 1, 0.0f, xSize_d - 1.0f))];
+		colorShared[threadIdx.y + SM_RADIUS][threadIdx.x + 2 * SM_RADIUS] = oldColor[y * xSize_d + int(CLAMP(x + 1, 0.0f, xSize_d - 1.0f))];
 	}
 
-	colorShared[threadIdx.y + RADIUS][threadIdx.x + RADIUS] = oldColor[y * xSize_d + x];
+	colorShared[threadIdx.y + SM_RADIUS][threadIdx.x + SM_RADIUS] = oldColor[y * xSize_d + x];
 
 	__syncthreads();
 
@@ -325,11 +328,11 @@ __global__ void diffuseCol(float3* oldColor, float dt)
 
 	for (int i = 0; i < 20; i++)
 	{
-		cL = colorShared[threadIdx.y + RADIUS][threadIdx.x + RADIUS - 1];
-		cR = colorShared[threadIdx.y + RADIUS][threadIdx.x + RADIUS + 1];
-		cB = colorShared[threadIdx.y + RADIUS - 1][threadIdx.x + RADIUS];
-		cT = colorShared[threadIdx.y + RADIUS + 1][threadIdx.x + RADIUS];
-		cC = colorShared[threadIdx.y + RADIUS][threadIdx.x + RADIUS];
+		cL = colorShared[threadIdx.y + SM_RADIUS][threadIdx.x + SM_RADIUS - 1];
+		cR = colorShared[threadIdx.y + SM_RADIUS][threadIdx.x + SM_RADIUS + 1];
+		cB = colorShared[threadIdx.y + SM_RADIUS - 1][threadIdx.x + SM_RADIUS];
+		cT = colorShared[threadIdx.y + SM_RADIUS + 1][threadIdx.x + SM_RADIUS];
+		cC = colorShared[threadIdx.y + SM_RADIUS][threadIdx.x + SM_RADIUS];
 
 
 		float3 newValue = (cL + cR + cB + cT + cC * alpha) * (1.f / beta);
@@ -337,12 +340,12 @@ __global__ void diffuseCol(float3* oldColor, float dt)
 
 		__syncthreads();
 
-		colorShared[threadIdx.y + RADIUS][threadIdx.x + RADIUS] = newValue;
+		colorShared[threadIdx.y + SM_RADIUS][threadIdx.x + SM_RADIUS] = newValue;
 
 		__syncthreads();
 	}
 
-	oldColor[y * xSize_d + x] = colorShared[threadIdx.y + RADIUS][threadIdx.x + RADIUS];
+	oldColor[y * xSize_d + x] = colorShared[threadIdx.y + SM_RADIUS][threadIdx.x + SM_RADIUS];
 
 }
 
@@ -351,28 +354,26 @@ __global__ void diffuseVel(float2* oldVel, float dt)
 {
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
 	int y = blockIdx.y * blockDim.y + threadIdx.y;
-	int RADIUS = 1;
-	int BmR = 15;
-	__shared__ float2 velShared[18][18];
+	__shared__ float2 velShared[SM_SIZE][SM_SIZE];
 
-	if (threadIdx.y < RADIUS)
+	if (threadIdx.y < SM_RADIUS)
 	{
-		velShared[threadIdx.y][threadIdx.x + RADIUS] = oldVel[int(CLAMP(y - 1, 0.0f, ySize_d - 1.0f)) * xSize_d + x];
+		velShared[threadIdx.y][threadIdx.x + SM_RADIUS] = oldVel[int(CLAMP(y - 1, 0.0f, ySize_d - 1.0f)) * xSize_d + x];
 	}
-	else if (threadIdx.y >= BmR)
+	else if (threadIdx.y >= BMR)
 	{
-		velShared[threadIdx.y + 2 * RADIUS][threadIdx.x + RADIUS] = oldVel[int(CLAMP(y + 1, 0.0f, ySize_d - 1.0f)) * xSize_d + x];
+		velShared[threadIdx.y + 2 * SM_RADIUS][threadIdx.x + SM_RADIUS] = oldVel[int(CLAMP(y + 1, 0.0f, ySize_d - 1.0f)) * xSize_d + x];
 	}
-	if (threadIdx.x < RADIUS)
+	if (threadIdx.x < SM_RADIUS)
 	{
-		velShared[threadIdx.y + RADIUS][threadIdx.x] = oldVel[y * xSize_d + int(CLAMP(x - 1, 0.0f, xSize_d - 1.0f))];
+		velShared[threadIdx.y + SM_RADIUS][threadIdx.x] = oldVel[y * xSize_d + int(CLAMP(x - 1, 0.0f, xSize_d - 1.0f))];
 	}
-	else if (threadIdx.x >= BmR)
+	else if (threadIdx.x >= BMR)
 	{
-		velShared[threadIdx.y + RADIUS][threadIdx.x + 2 * RADIUS] = oldVel[y * xSize_d + int(CLAMP(x + 1, 0.0f, xSize_d - 1.0f))];
+		velShared[threadIdx.y + SM_RADIUS][threadIdx.x + 2 * SM_RADIUS] = oldVel[y * xSize_d + int(CLAMP(x + 1, 0.0f, xSize_d - 1.0f))];
 	}
 
-	velShared[threadIdx.y + RADIUS][threadIdx.x + RADIUS] = oldVel[y * xSize_d + x];
+	velShared[threadIdx.y + SM_RADIUS][threadIdx.x + SM_RADIUS] = oldVel[y * xSize_d + x];
 
 	__syncthreads();
 
@@ -386,24 +387,24 @@ __global__ void diffuseVel(float2* oldVel, float dt)
 
 	for (int i = 0; i < 20; i++)
 	{
-		uL = velShared[threadIdx.y + RADIUS][threadIdx.x + RADIUS - 1];
-		uR = velShared[threadIdx.y + RADIUS][threadIdx.x + RADIUS + 1];
-		uB = velShared[threadIdx.y + RADIUS - 1][threadIdx.x + RADIUS];
-		uT = velShared[threadIdx.y + RADIUS + 1][threadIdx.x + RADIUS];
-		uC = velShared[threadIdx.y + RADIUS][threadIdx.x + RADIUS];
+		uL = velShared[threadIdx.y + SM_RADIUS][threadIdx.x + SM_RADIUS - 1];
+		uR = velShared[threadIdx.y + SM_RADIUS][threadIdx.x + SM_RADIUS + 1];
+		uB = velShared[threadIdx.y + SM_RADIUS - 1][threadIdx.x + SM_RADIUS];
+		uT = velShared[threadIdx.y + SM_RADIUS + 1][threadIdx.x + SM_RADIUS];
+		uC = velShared[threadIdx.y + SM_RADIUS][threadIdx.x + SM_RADIUS];
 
 		float2 newValue = (uT + uB + uL + uR + uC * alpha) * (1.f / beta);
 
 
 		__syncthreads();
 
-		velShared[threadIdx.y + RADIUS][threadIdx.x + RADIUS] = newValue;
+		velShared[threadIdx.y + SM_RADIUS][threadIdx.x + SM_RADIUS] = newValue;
 
 		__syncthreads();
 	}
 
 
-	oldVel[y * xSize_d + x] = velShared[threadIdx.y + RADIUS][threadIdx.x + RADIUS];
+	oldVel[y * xSize_d + x] = velShared[threadIdx.y + SM_RADIUS][threadIdx.x + SM_RADIUS];
 }
 
 // fills output image with corresponding color
@@ -428,49 +429,47 @@ __global__ void computePressureImpl(float* divergenceField, float* pOld, float d
 
 	float pL, pR, pB, pT;
 
-	int RADIUS = 1;
-	int BmR = 15;
-	__shared__ float pressureShared[18][18];
+	__shared__ float pressureShared[SM_SIZE][SM_SIZE];
 
-	if (threadIdx.y < RADIUS)
+	if (threadIdx.y < SM_RADIUS)
 	{
-		pressureShared[threadIdx.y][threadIdx.x + RADIUS] = pOld[int(CLAMP(y - 1, 0.0f, ySize_d - 1.0f)) * xSize_d + x];
+		pressureShared[threadIdx.y][threadIdx.x + SM_RADIUS] = pOld[int(CLAMP(y - 1, 0.0f, ySize_d - 1.0f)) * xSize_d + x];
 	}
-	else if (threadIdx.y >= BmR)
+	else if (threadIdx.y >= BMR)
 	{
-		pressureShared[threadIdx.y + 2 * RADIUS][threadIdx.x + RADIUS] = pOld[int(CLAMP(y + 1, 0.0f, ySize_d - 1.0f)) * xSize_d + x];
+		pressureShared[threadIdx.y + 2 * SM_RADIUS][threadIdx.x + SM_RADIUS] = pOld[int(CLAMP(y + 1, 0.0f, ySize_d - 1.0f)) * xSize_d + x];
 	}
-	if (threadIdx.x < RADIUS)
+	if (threadIdx.x < SM_RADIUS)
 	{
-		pressureShared[threadIdx.y + RADIUS][threadIdx.x] = pOld[y * xSize_d + int(CLAMP(x - 1, 0.0f, xSize_d - 1.0f))];
+		pressureShared[threadIdx.y + SM_RADIUS][threadIdx.x] = pOld[y * xSize_d + int(CLAMP(x - 1, 0.0f, xSize_d - 1.0f))];
 	}
-	else if (threadIdx.x >= BmR)
+	else if (threadIdx.x >= BMR)
 	{
-		pressureShared[threadIdx.y + RADIUS][threadIdx.x + 2 * RADIUS] = pOld[y * xSize_d + int(CLAMP(x + 1, 0.0f, xSize_d - 1.0f))];
+		pressureShared[threadIdx.y + SM_RADIUS][threadIdx.x + 2 * SM_RADIUS] = pOld[y * xSize_d + int(CLAMP(x + 1, 0.0f, xSize_d - 1.0f))];
 	}
 
-	pressureShared[threadIdx.y + RADIUS][threadIdx.x + RADIUS] = pOld[y * xSize_d + x];
+	pressureShared[threadIdx.y + SM_RADIUS][threadIdx.x + SM_RADIUS] = pOld[y * xSize_d + x];
 
 	__syncthreads();
 
 	for (int i = 0; i < 30; i++)
 	{
 
-		pL = pressureShared[threadIdx.y + RADIUS][threadIdx.x + RADIUS - 1];
-		pR = pressureShared[threadIdx.y + RADIUS][threadIdx.x + RADIUS + 1];
-		pB = pressureShared[threadIdx.y + RADIUS - 1][threadIdx.x + RADIUS];
-		pT = pressureShared[threadIdx.y + RADIUS + 1][threadIdx.x + RADIUS];
+		pL = pressureShared[threadIdx.y + SM_RADIUS][threadIdx.x + SM_RADIUS - 1];
+		pR = pressureShared[threadIdx.y + SM_RADIUS][threadIdx.x + SM_RADIUS + 1];
+		pB = pressureShared[threadIdx.y + SM_RADIUS - 1][threadIdx.x + SM_RADIUS];
+		pT = pressureShared[threadIdx.y + SM_RADIUS + 1][threadIdx.x + SM_RADIUS];
 
 		float pressure = (pL + pR + pB + pT - div) * 0.25f;
 
 		__syncthreads();
 
-		pressureShared[threadIdx.y + RADIUS][threadIdx.x + RADIUS] = pressure;
+		pressureShared[threadIdx.y + SM_RADIUS][threadIdx.x + SM_RADIUS] = pressure;
 
 		__syncthreads();
 	}
 
-	pOld[y * xSize_d + x] = pressureShared[threadIdx.y + RADIUS][threadIdx.x + RADIUS];
+	pOld[y * xSize_d + x] = pressureShared[threadIdx.y + SM_RADIUS][threadIdx.x + SM_RADIUS];
 }
 
 // projects pressure field on velocity field
@@ -478,7 +477,7 @@ __global__ void project(float2* oldVel, float* pField)
 {
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
 	int y = blockIdx.y * blockDim.y + threadIdx.y;
-	float2& u = oldVel[y * xSize_d + x];
+
 
 	float pL, pR, pB, pT;
 
@@ -489,8 +488,9 @@ __global__ void project(float2* oldVel, float* pField)
 
 	float2 subtractVel = { (pR - pL) * 0.5f, (pT - pB) * 0.5f };
 
+	__syncthreads();
 
-	u = u - subtractVel;
+	oldVel[y * xSize_d + x] -= subtractVel;
 }
 
 // applies force and add color dye to the particle field
