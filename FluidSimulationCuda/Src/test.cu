@@ -3,12 +3,23 @@
 #include <cuda_gl_interop.h>
 #include <surface_functions.h>
 #include <helper_math.h>
+#include <GLFW/glfw3.h>
 
 #define CLAMP(val, minv, maxv) fminf(maxv, fmaxf(minv, val))
 #define MIX(v0, v1, t) v0 * (1.f - t) + v1 * t 
 
-#define CUDA_CALL(x) cudaError_t error = cudaGetLastError(); if (error != cudaSuccess) { std::cout << cudaGetErrorName(error) << std::endl; std::abort(); } x
-#
+#define CUDA_CALL(call)                                          \
+do {                                                                  \
+    cudaError_t err = call;                                           \
+    if (cudaSuccess != err) {                                         \
+        fprintf (stderr, "Cuda error in file '%s' in line %i : %s.\n",\
+                 __FILE__, __LINE__, cudaGetErrorString(err) );       \
+        exit(EXIT_FAILURE);                                           \
+    }                                                                 \
+} while (0)
+
+double averageKernelTimes[8];
+uint64_t g_totalFrames = 0;
 
 static struct Config
 {
@@ -92,10 +103,20 @@ __constant__ struct Config devConstants;
 cudaStream_t stream_0;
 cudaStream_t stream_1;
 
+double* g_getAverageTimes()
+{
+	return averageKernelTimes;
+}
+
 // inits all buffers, must be called before computeField function call
 void cudaInit(size_t x, size_t y, int scale, GLuint texture)
 {
 	setConfig();
+
+	for (int i = 0; i < 8; i++)
+	{
+		averageKernelTimes[i] = 0;
+	}
 
 	colorArray[0] = { 1.0f, 0.0f, 0.0f };
 	colorArray[1] = { 0.0f, 1.0f, 0.0f };
@@ -112,52 +133,52 @@ void cudaInit(size_t x, size_t y, int scale, GLuint texture)
 	config.radius /= (scale * scale);
 
 
+	
+	CUDA_CALL(cudaSetDevice(0));
+	CUDA_CALL(cudaGLSetGLDevice(0));
 
-	cudaSetDevice(0);
-	cudaGLSetGLDevice(0);
+	CUDA_CALL(cudaMalloc(&textureColorField, xSize * ySize * sizeof(uchar4)));
 
-	cudaMalloc(&textureColorField, xSize * ySize * sizeof(uchar4));
-
-	cudaMalloc(&dyeColorField, xSize * ySize * sizeof(float3));
-	cudaMalloc(&velocityField, xSize * ySize * sizeof(float2));
+	CUDA_CALL(cudaMalloc(&dyeColorField, xSize * ySize * sizeof(float3)));
+	CUDA_CALL(cudaMalloc(&velocityField, xSize * ySize * sizeof(float2)));
 
 
-	cudaMalloc(&pressureField, xSize * ySize * sizeof(float));
-	cudaMalloc(&vorticityField, xSize * ySize * sizeof(float));
-	cudaMalloc(&divergenceField, xSize * ySize * sizeof(float));
+	CUDA_CALL(cudaMalloc(&pressureField, xSize * ySize * sizeof(float)));
+	CUDA_CALL(cudaMalloc(&vorticityField, xSize * ySize * sizeof(float)));
+	CUDA_CALL(cudaMalloc(&divergenceField, xSize * ySize * sizeof(float)));
 
 	int xs = xSize;
 	int ys = ySize;
 
-	cudaStreamCreate(&stream_0);
-	cudaStreamCreate(&stream_1);
+	CUDA_CALL(cudaStreamCreate(&stream_0));
+	CUDA_CALL(cudaStreamCreate(&stream_1));
 
-	cudaMemcpyToSymbol(xSize_d, &xs, sizeof(int));
-	cudaMemcpyToSymbol(ySize_d, &ys, sizeof(int));
-	cudaMemcpyToSymbol(devConstants, &config, sizeof(Config));
+	CUDA_CALL(cudaMemcpyToSymbol(xSize_d, &xs, sizeof(int)));
+	CUDA_CALL(cudaMemcpyToSymbol(ySize_d, &ys, sizeof(int)));
+	CUDA_CALL(cudaMemcpyToSymbol(devConstants, &config, sizeof(Config)));
 
-	cudaError_t cgError = cudaGraphicsGLRegisterImage(&textureResource, texture, GL_TEXTURE_2D, cudaGraphicsMapFlagsWriteDiscard);
+	CUDA_CALL(cudaGraphicsGLRegisterImage(&textureResource, texture, GL_TEXTURE_2D, cudaGraphicsMapFlagsWriteDiscard));
 
 
 	memset(&resourceDesc, 0, sizeof(resourceDesc));
 	resourceDesc.resType = cudaResourceTypeArray;
 
-	cudaGraphicsMapResources(1, &textureResource);
-	cudaGraphicsSubResourceGetMappedArray(&textureArray, textureResource, 0, 0);
+	CUDA_CALL(cudaGraphicsMapResources(1, &textureResource));
+	CUDA_CALL(cudaGraphicsSubResourceGetMappedArray(&textureArray, textureResource, 0, 0));
 
 	resourceDesc.res.array.array = textureArray;
-	cudaCreateSurfaceObject(&surfObj, &resourceDesc);
+	CUDA_CALL(cudaCreateSurfaceObject(&surfObj, &resourceDesc));
 }
 
 // releases all buffers, must be called on program exit
 void cudaExit()
 {
-	cudaFree(velocityField);
-	cudaFree(dyeColorField);
-	cudaFree(textureColorField);
-	cudaFree(pressureField);
-	cudaFree(vorticityField);
-	cudaFree(divergenceField);
+	CUDA_CALL(cudaFree(velocityField));
+	CUDA_CALL(cudaFree(dyeColorField));
+	CUDA_CALL(cudaFree(textureColorField));
+	CUDA_CALL(cudaFree(pressureField));
+	CUDA_CALL(cudaFree(vorticityField));
+	CUDA_CALL(cudaFree(divergenceField));
 }
 
 // interpolates quantity of grid cells
@@ -562,18 +583,40 @@ void computeField(float dt, int x1pos, int y1pos, int x2pos, int y2pos, bool isP
 	dim3 threadsPerBlock(sConfig.xThreads, sConfig.yThreads);
 	dim3 numBlocks(xSize / threadsPerBlock.x, ySize / threadsPerBlock.y);
 
+	for (int i = 0; i < 8; i++)
+	{
+		averageKernelTimes[i] = averageKernelTimes[i] * g_totalFrames;
+	}
+
+	g_totalFrames++;
+
+	double startTime = glfwGetTime();
+	double endKernelTime = 0;
+
 	// advect
 	advect << <numBlocks, threadsPerBlock >> > (velocityField, dt);
 	
 	advect << <numBlocks, threadsPerBlock >> > (dyeColorField, velocityField, dt);
-
+	CUDA_CALL(cudaDeviceSynchronize());
+	endKernelTime = glfwGetTime() - startTime;
+	averageKernelTimes[0] += endKernelTime;
+	startTime = glfwGetTime();
 
 	// curls and vortisity
 	computeVorticity <<<numBlocks, threadsPerBlock >> > (velocityField, vorticityField, dt);
+	CUDA_CALL(cudaDeviceSynchronize());
+	endKernelTime = glfwGetTime() - startTime;
+	averageKernelTimes[1] += endKernelTime;
+	startTime = glfwGetTime();
 
 	// diffuse velocity and color
 	diffuseVel << <numBlocks, threadsPerBlock, 0, stream_0 >> > (velocityField, dt);
 	diffuseCol << <numBlocks, threadsPerBlock, 0, stream_1 >> > (dyeColorField, dt);
+	CUDA_CALL(cudaStreamSynchronize(stream_0));
+	CUDA_CALL(cudaStreamSynchronize(stream_1));
+	endKernelTime = glfwGetTime() - startTime;
+	averageKernelTimes[2] += endKernelTime;
+	startTime = glfwGetTime();
 
 	// apply force
 	if (isPressed)
@@ -592,39 +635,58 @@ void computeField(float dt, int x1pos, int y1pos, int x2pos, int y2pos, bool isP
 		F.x = (x2pos - x1pos) * scale;
 		F.y = (y2pos - y1pos) * scale;
 		float2 pos = { x2pos * 1.0f, y2pos * 1.0f };
-		cudaStreamSynchronize(stream_0);
-		cudaStreamSynchronize(stream_1);
+		CUDA_CALL(cudaStreamSynchronize(stream_0));
+		CUDA_CALL(cudaStreamSynchronize(stream_1));
 		applyForce << <numBlocks, threadsPerBlock >> > (velocityField, dyeColorField, currentColor, F, pos, dt);
+
 	}
 	else
 	{
 		timeSincePress += dt;
 	}
+	CUDA_CALL(cudaDeviceSynchronize());
+	endKernelTime = glfwGetTime() - startTime;
+	averageKernelTimes[3] += endKernelTime;
+	startTime = glfwGetTime();
 
 	// compute pressure
 	computeDivergence << <numBlocks, threadsPerBlock >> > (divergenceField, velocityField);
 	computePressureImpl << <numBlocks, threadsPerBlock >> > (divergenceField, pressureField, dt);
+	CUDA_CALL(cudaDeviceSynchronize());
+	endKernelTime = glfwGetTime() - startTime;
+	averageKernelTimes[4] += endKernelTime;
+	startTime = glfwGetTime();
 
 	// project
 	project <<<numBlocks, threadsPerBlock >> > (velocityField, pressureField);
-	cudaMemsetAsync(pressureField, 0.0f, xSize * ySize * sizeof(float));
+	CUDA_CALL(cudaMemsetAsync(pressureField, 0.0f, xSize * ySize * sizeof(float)));
+	CUDA_CALL(cudaDeviceSynchronize());
+	endKernelTime = glfwGetTime() - startTime;
+	averageKernelTimes[5] += endKernelTime;
+	startTime = glfwGetTime();
 
 	// paint image
 	paint <<<numBlocks, threadsPerBlock >> > (textureColorField, dyeColorField);
+	CUDA_CALL(cudaDeviceSynchronize());
+	endKernelTime = glfwGetTime() - startTime;
+	averageKernelTimes[6] += endKernelTime;
+	startTime = glfwGetTime();
 
 	// apply bloom in mouse pos
 	if (config.bloomEnabled && timeSincePress < 5.0f)
 	{
 		applyBloom <<<numBlocks, threadsPerBlock >> > (textureColorField, x2pos, y2pos);
+		CUDA_CALL(cudaDeviceSynchronize());
+		endKernelTime = glfwGetTime() - startTime;
+		averageKernelTimes[7] += endKernelTime;
 	}
 
 	writeToTexture << <numBlocks, threadsPerBlock >> > (surfObj, textureColorField);
 
-	cudaError_t error = cudaGetLastError();
-	if (error != cudaSuccess)
+	for (int i = 0; i < 8; i++)
 	{
-		std::cout << cudaGetErrorName(error) << std::endl;
+		averageKernelTimes[i] = averageKernelTimes[i] / g_totalFrames;
 	}
 
-	cudaDeviceSynchronize();
+	CUDA_CALL(cudaDeviceSynchronize());
 }

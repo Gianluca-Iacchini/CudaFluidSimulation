@@ -3,13 +3,16 @@
 #include <vec2.h>
 #include <helper_math.h>
 #include <thread>
-
+#include <GLFW/glfw3.h>
 
 #define CLAMP(val, minv, maxv) fminf(maxv, fmaxf(minv, val))
 #define MIX(v0, v1, t) v0 * (1.f - t) + v1 * t 
 
 float deltTime = 0.f;
 float _timePassed = 0.f;
+
+double averageComputeTimes[6];
+uint64_t c_totalFrames = 0;
 
 int w = 512;
 int h = 512;
@@ -48,6 +51,11 @@ vec3f _colorArray[7];
 static vec3f _currentColor;
 
 void init(int width, int height, int scale, GLuint& texture) {
+
+    for (int i = 0; i < 6; i++)
+    {
+        averageComputeTimes[i] = 0;
+    }
 
     _colorArray[0] = { 1.0f, 0.0f, 0.0f };
     _colorArray[1] = { 0.0f, 1.0f, 0.0f };
@@ -304,31 +312,64 @@ void apply_color_and_force(float dt, float mouseX, float mouseY)
 
 void fluid_simulation_step(float dt, float mouseX, float mouseY, bool isPressed) {
 
-    //std::thread t(&pressure_iteration);
+    for (int i = 0; i < 6; i++)
+    {
+        averageComputeTimes[i] = averageComputeTimes[i] * c_totalFrames;
+    }
+
+    c_totalFrames++;
+
+    double startTime = glfwGetTime();
+    double endComputeTime = 0;
+
+    // Advect
     advect_velocity(dt, aDecay);
     advect_color(dt, aDecay);
+    endComputeTime = glfwGetTime() - startTime;
+    averageComputeTimes[0] += endComputeTime;
+    startTime = glfwGetTime();
 
+    // Vorticity
+    vorticity_confinement(dt);
+    endComputeTime = glfwGetTime() - startTime;
+    averageComputeTimes[1] += endComputeTime;
+    startTime = glfwGetTime();
 
+    // Diffuse
+    diffuse(dt, density_diffusion, velocity_diffusion);
+    endComputeTime = glfwGetTime() - startTime;
+    averageComputeTimes[2] += endComputeTime;
+    startTime = glfwGetTime();
+
+    // Force
     if (isPressed)
     {
         apply_color_and_force(dt, mouseX, mouseY);
     }
+    endComputeTime = glfwGetTime() - startTime;
+    averageComputeTimes[3] += endComputeTime;
+    startTime = glfwGetTime();
 
-
-
-    vorticity_confinement(dt);
-
-    diffuse(dt, density_diffusion, velocity_diffusion);
-
-
+    // Pressure
     pressure_iteration();
+    endComputeTime = glfwGetTime() - startTime;
+    averageComputeTimes[4] += endComputeTime;
+    startTime = glfwGetTime();
 
+    // Project
     FOR_EACH_CELL{
     old_velocity[x + y * nx].x -= 0.5f * (old_pressure[int(CLAMP(x + 1, 0, nx - 1)) + nx * int(CLAMP(y, 0, ny - 1))] - old_pressure[int(CLAMP(x - 1, 0, nx - 1)) + nx * int(CLAMP(y, 0, ny - 1))]);
     old_velocity[x + y * nx].y -= 0.5f * (old_pressure[int(CLAMP(x, 0, nx - 1)) + nx * int(CLAMP(y + 1, 0, ny - 1))] - old_pressure[int(CLAMP(x, 0, nx - 1)) + nx * int(CLAMP(y - 1, 0, ny - 1))]);
     }
+    endComputeTime = glfwGetTime() - startTime;
+    averageComputeTimes[5] += endComputeTime;
+    startTime = glfwGetTime();
 
-    // zero out stuff at bottom
+    for (int i = 0; i < 6; i++)
+    {
+        averageComputeTimes[i] /= c_totalFrames;
+    }
+
     for (int y = 0; y <= 10; y++)
     {
         for (int x = 0; x < nx; x++)
@@ -358,6 +399,12 @@ void on_frame(float dt, float mouseX, float mouseY, bool isPressed) {
 
     // upload pixels to texture
 
+
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, nx, ny, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+}
+
+double* c_getAverageTimes()
+{
+    return averageComputeTimes;
 }
 

@@ -42,6 +42,20 @@ double yPos = 0.0f;
 double lastXPos = 0.0f;
 double lastYPos = 0.0f;
 
+double computeTimeStart = 0.0f;
+double computeTimeEnd = 0.0f;
+uint64_t totalFrames = 0;
+double minComputeTime = 999;
+double maxComputeTime = 0.0f;
+double averageComputeTime = 0.0f;
+
+std::string roundedFloatToString(float val)
+{ 
+	float nearest = roundf(val * 100) / 100;
+	std::string valStr = std::to_string(nearest);
+	return valStr.substr(0, valStr.find(".") + 3);
+}
+
 int main()
 {
 	glfwInit();
@@ -120,9 +134,9 @@ int main()
 			// Measure speed
 		double currentTime = glfwGetTime();
 		nbFrames++;
-		if (currentTime - lasttFrameTime >= 1.0) { // If last prinf() was more than 1 sec ago
+		if (currentTime - lasttFrameTime >= 0.5) { // If last prinf() was more than 1 sec ago
 				// printf and reset timer
-			std::string frames = "FPS: " + std::to_string(nbFrames);
+			std::string frames = "FPS: " + std::to_string(nbFrames) + "     FRAME TIME: " + roundedFloatToString(1000.f / nbFrames) + "ms";
 			glfwSetWindowTitle(window, frames.c_str());
 			nbFrames = 0;
 			lasttFrameTime += 1.0;
@@ -131,11 +145,19 @@ int main()
 
 		processInput(window);
 
+		computeTimeStart = glfwGetTime();
 #if GPU_SIM
 		computeField(deltaTime, xPos/SCALE, (SCR_HEIGHT - yPos)/SCALE, lastXPos/SCALE, (SCR_HEIGHT - (lastYPos))/SCALE, isPressed);
 #else
 		on_frame(deltaTime, xPos, yPos, isPressed);
 #endif
+		computeTimeEnd = glfwGetTime() - computeTimeStart;
+
+		averageComputeTime += computeTimeEnd;
+		minComputeTime = std::min(minComputeTime, computeTimeEnd);
+		maxComputeTime = std::max(maxComputeTime, computeTimeEnd);
+		totalFrames++;
+
 		glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT);
 
@@ -153,7 +175,26 @@ int main()
 		glfwPollEvents();
 
 	}
+	std::string steps[] = { "Advect", "Vorticity", "Diffuse", "Force", "Pressure", "Project", "Paint", "Bloom" };
+	
+	double* stepTimes = c_getAverageTimes();
+	int maxIter = 6;
 
+#if GPU_SIM
+	stepTimes = g_getAverageTimes();
+	maxIter = 8;
+#endif // GPU_SIM
+	std::cout << "================ SIMULATION END ======================" << std::endl;
+	std::cout << "Total application time: " << roundedFloatToString(glfwGetTime()) << " seconds" << std::endl;
+	std::cout << "------------------------------------------------------" << std::endl;
+	std::cout << "Average compute time: " << roundedFloatToString(averageComputeTime * 1000 / totalFrames) << "ms" << std::endl;
+	std::cout << "Max compute time: " << roundedFloatToString(maxComputeTime * 1000) << "ms" << std::endl;
+	std::cout << "Min compute time: " << roundedFloatToString(minComputeTime * 1000) << "ms" << std::endl;
+	for (int i = 0; i < maxIter; i++)
+	{
+		std::cout << steps[i] << " compute time: " << roundedFloatToString(1000 * stepTimes[i]) << "ms" << std::endl;
+	}
+	std::cout << "======================================================" << std::endl;
 	cudaExit();
 	glfwTerminate();
 	return 0;
