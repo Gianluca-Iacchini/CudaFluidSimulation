@@ -2,8 +2,8 @@
 #include <GLFW/glfw3.h>
 #include <Shaders/Shader.h>
 #include <iostream>
-#include "test.cuh"
-#include "cpuFluidSim.h"
+#include "GPUFluidSim.cuh"
+#include "CPUFluidSim.h"
 #include <string>
 
 #define GPU_SIM 1
@@ -22,12 +22,13 @@ const unsigned int SCR_HEIGHT = 1024;
 const int SCALE = 8;
 #endif
 
+/* OpenGL data*/
 float vertices[] = {
 	-1.0f, -1.0f, 1.0f, -1.0f,
 	-1.0f, 1.0f, 1.0f, 1.0f
 };
 
-unsigned int indices[] = {  // note that we start from 0!
+unsigned int indices[] = { 
 	0, 1, 2,  // first Triangle
 	1, 3, 2   // second Triangle
 };
@@ -35,6 +36,7 @@ unsigned int indices[] = {  // note that we start from 0!
 unsigned int VBO, VAO, EBO;
 unsigned int texture;
 
+/* Mouse input data */
 bool isPressed = false;
 bool firstClick = true;
 double xPos = 0.0f;
@@ -42,6 +44,7 @@ double yPos = 0.0f;
 double lastXPos = 0.0f;
 double lastYPos = 0.0f;
 
+/* Timer data */
 double computeTimeStart = 0.0f;
 double computeTimeEnd = 0.0f;
 uint64_t totalFrames = 0;
@@ -49,6 +52,7 @@ double minComputeTime = 999;
 double maxComputeTime = 0.0f;
 double averageComputeTime = 0.0f;
 
+/* Rounds float and converts it to string */
 std::string roundedFloatToString(float val)
 { 
 	float nearest = roundf(val * 100) / 100;
@@ -58,6 +62,7 @@ std::string roundedFloatToString(float val)
 
 int main()
 {
+	/* Initialize GLFW */
 	glfwInit();
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
@@ -75,22 +80,24 @@ int main()
 	glfwSwapInterval(0);
 	glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
 
-
+	/* Initialize GLAD */
 	if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
 	{
 		std::cout << "Failed to initialize GLAD" << std::endl;
 		return -1;
 	}
 
+	/* Create simple shader to display a quad with a texture */
 	Shader shader = Shader("Programs/test_shader.vert", "Programs/test_shader.frag");
 
-
+	/* Generate vertex */
 	glGenVertexArrays(1, &VAO);
 	glGenBuffers(1, &VBO);
 	glGenBuffers(1, &EBO);
 
 	glBindVertexArray(VAO);
 
+	/* Bind quad */
 	glBindBuffer(GL_ARRAY_BUFFER, VBO);
 	glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
 
@@ -101,9 +108,10 @@ int main()
 	glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
 	glEnableVertexAttribArray(0);
 
+	/* Generate and setup texture */
 	glGenTextures(1, &texture);
 	glBindTexture(GL_TEXTURE_2D, texture);
-	// set the texture wrapping/filtering options (on the currently bound texture object)
+
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
@@ -113,9 +121,9 @@ int main()
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, SCR_WIDTH / SCALE, SCR_HEIGHT / SCALE, 0, GL_RGBA, GL_UNSIGNED_BYTE, 0);
 
 #if GPU_SIM
-	cudaInit(SCR_WIDTH, SCR_HEIGHT, SCALE, texture);
+	g_fluidSimInit(SCR_WIDTH, SCR_HEIGHT, SCALE, texture);
 #else
-	init(SCR_WIDTH, SCR_HEIGHT, SCALE, texture);
+	c_fluidSimInit(SCR_WIDTH, SCR_HEIGHT, SCALE, texture);
 #endif // GPU_SIM
 
 	float deltaTime = 0.f;
@@ -131,11 +139,10 @@ int main()
 
 		
 
-			// Measure speed
+		// FPS and frame time counters.
 		double currentTime = glfwGetTime();
 		nbFrames++;
-		if (currentTime - lasttFrameTime >= 0.5) { // If last prinf() was more than 1 sec ago
-				// printf and reset timer
+		if (currentTime - lasttFrameTime >= 0.5) { 
 			std::string frames = "FPS: " + std::to_string(nbFrames) + "     FRAME TIME: " + roundedFloatToString(1000.f / nbFrames) + "ms";
 			glfwSetWindowTitle(window, frames.c_str());
 			nbFrames = 0;
@@ -144,12 +151,12 @@ int main()
 
 
 		processInput(window);
-
 		computeTimeStart = glfwGetTime();
+
 #if GPU_SIM
-		computeField(deltaTime, xPos/SCALE, (SCR_HEIGHT - yPos)/SCALE, lastXPos/SCALE, (SCR_HEIGHT - (lastYPos))/SCALE, isPressed);
+		g_OnSimulationStep(deltaTime, xPos/SCALE, (SCR_HEIGHT - yPos)/SCALE, lastXPos/SCALE, (SCR_HEIGHT - (lastYPos))/SCALE, isPressed);
 #else
-		on_frame(deltaTime, xPos, yPos, isPressed);
+		c_OnSimulationStep(deltaTime, xPos, yPos, isPressed);
 #endif
 		computeTimeEnd = glfwGetTime() - computeTimeStart;
 
@@ -183,6 +190,9 @@ int main()
 #if GPU_SIM
 	stepTimes = g_getAverageTimes();
 	maxIter = 8;
+	g_fluidSimFree();
+#else
+	c_fluidSimFree();
 #endif // GPU_SIM
 	std::cout << "================ SIMULATION END ======================" << std::endl;
 	std::cout << "Total application time: " << roundedFloatToString(glfwGetTime()) << " seconds" << std::endl;
@@ -190,12 +200,13 @@ int main()
 	std::cout << "Average compute time: " << roundedFloatToString(averageComputeTime * 1000 / totalFrames) << "ms" << std::endl;
 	std::cout << "Max compute time: " << roundedFloatToString(maxComputeTime * 1000) << "ms" << std::endl;
 	std::cout << "Min compute time: " << roundedFloatToString(minComputeTime * 1000) << "ms" << std::endl;
+	std::cout << "------------------------------------------------------" << std::endl;
 	for (int i = 0; i < maxIter; i++)
 	{
 		std::cout << steps[i] << " compute time: " << roundedFloatToString(1000 * stepTimes[i]) << "ms" << std::endl;
 	}
 	std::cout << "======================================================" << std::endl;
-	cudaExit();
+
 	glfwTerminate();
 	return 0;
 }
@@ -233,10 +244,8 @@ void processInput(GLFWwindow* window)
 
 }
 
-
+/* OpenGL callback function */
 void framebuffer_size_callback(GLFWwindow* window, int width, int height)
 {
-	// make sure the viewport matches the new window dimensions; note that width and 
-	// height will be significantly larger than specified on retina displays.
 	glViewport(0, 0, width, height);
 }

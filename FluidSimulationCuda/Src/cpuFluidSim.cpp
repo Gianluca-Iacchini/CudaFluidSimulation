@@ -1,4 +1,4 @@
-#include "cpuFluidSim.h"
+#include "CPUFluidSim.h"
 #include <algorithm>
 #include <vec2.h>
 #include <helper_math.h>
@@ -8,18 +8,20 @@
 #define CLAMP(val, minv, maxv) fminf(maxv, fmaxf(minv, val))
 #define MIX(v0, v1, t) v0 * (1.f - t) + v1 * t 
 
-float deltTime = 0.f;
-float _timePassed = 0.f;
 
+/* Compute time logging variables */
 double averageComputeTimes[6];
 uint64_t c_totalFrames = 0;
 
-int w = 512;
-int h = 512;
+/* Screen size*/
+int w;
+int h;
 
-int nx = 256;
-int ny = 256;
+/* Grid size */
+int nx;
+int ny;
 
+/* Fluid parameters */
 int iterations = 5;
 float vorticity = 0.35f;
 float velocity_diffusion = 0.8f;
@@ -47,11 +49,15 @@ GLuint cpuTexture = -1;
 
 #define FOR_EACH_CELL for (int y = 0; y < ny; y++) for (int x = 0; x < nx; x++)
 
+/* Variables for changing dye color */
 vec3f _colorArray[7];
 static vec3f _currentColor;
 
-void init(int width, int height, int scale, GLuint& texture) {
+float _timePassed = 0.f;
 
+void c_fluidSimInit(int width, int height, int scale, GLuint& texture) {
+
+    /* Initialize parameters */
     for (int i = 0; i < 6; i++)
     {
         averageComputeTimes[i] = 0;
@@ -76,7 +82,7 @@ void init(int width, int height, int scale, GLuint& texture) {
     nx = width / scale;
     ny = height / scale;
 
-
+    /* Allocate resources*/
     old_velocity = new vec2f[nx * ny];
     new_velocity = new vec2f[nx * ny];
 
@@ -100,7 +106,8 @@ void init(int width, int height, int scale, GLuint& texture) {
     }
 }
 
-vec3f interpolate(vec3f* grid, vec2f p) {
+/* Interpolate color at position p*/
+vec3f interpolate(vec3f* color, vec2f p) {
     float x1 = (int)p.x;
     float y1 = (int)p.y;
     float x2 = (int)p.x + 1;
@@ -108,10 +115,10 @@ vec3f interpolate(vec3f* grid, vec2f p) {
 
     vec3f p0, p1, p2, p3;
 
-    p0 = grid[int(CLAMP(y1, 0.0f, ny - 1)) * nx + int(CLAMP(x1, 0.0f, nx - 1))];
-    p1 = grid[int(CLAMP(y1, 0.0f, ny - 1)) * nx + int(CLAMP(x2, 0.0f, nx - 1))];
-    p2 = grid[int(CLAMP(y2, 0.0f, ny - 1)) * nx + int(CLAMP(x1, 0.0f, nx - 1))];
-    p3 = grid[int(CLAMP(y2, 0.0f, ny - 1)) * nx + int(CLAMP(x2, 0.0f, nx - 1))];
+    p0 = color[int(CLAMP(y1, 0.0f, ny - 1)) * nx + int(CLAMP(x1, 0.0f, nx - 1))];
+    p1 = color[int(CLAMP(y1, 0.0f, ny - 1)) * nx + int(CLAMP(x2, 0.0f, nx - 1))];
+    p2 = color[int(CLAMP(y2, 0.0f, ny - 1)) * nx + int(CLAMP(x1, 0.0f, nx - 1))];
+    p3 = color[int(CLAMP(y2, 0.0f, ny - 1)) * nx + int(CLAMP(x2, 0.0f, nx - 1))];
 
 
     float tx = (p.x - x1) / (x2 - x1);
@@ -123,8 +130,8 @@ vec3f interpolate(vec3f* grid, vec2f p) {
     return MIX(u1, u2, ty);
 }
 
-
-vec2f interpolate(vec2f* grid, vec2f p) {
+/* Interpolate velocity at position p */
+vec2f interpolate(vec2f* velocity, vec2f p) {
     float x1 = (int)p.x;
     float y1 = (int)p.y;
     float x2 = (int)p.x + 1;
@@ -132,10 +139,10 @@ vec2f interpolate(vec2f* grid, vec2f p) {
 
     vec2f v0, v1, v2, v3;
 
-    v0 = grid[int(CLAMP(y1, 0.0f, ny - 1)) * nx + int(CLAMP(x1, 0.0f, nx - 1))];
-    v1 = grid[int(CLAMP(y1, 0.0f, ny - 1)) * nx + int(CLAMP(x2, 0.0f, nx - 1))];
-    v2 = grid[int(CLAMP(y2, 0.0f, ny - 1)) * nx + int(CLAMP(x1, 0.0f, nx - 1))];
-    v3 = grid[int(CLAMP(y2, 0.0f, ny - 1)) * nx + int(CLAMP(x2, 0.0f, nx - 1))];
+    v0 = velocity[int(CLAMP(y1, 0.0f, ny - 1)) * nx + int(CLAMP(x1, 0.0f, nx - 1))];
+    v1 = velocity[int(CLAMP(y1, 0.0f, ny - 1)) * nx + int(CLAMP(x2, 0.0f, nx - 1))];
+    v2 = velocity[int(CLAMP(y2, 0.0f, ny - 1)) * nx + int(CLAMP(x1, 0.0f, nx - 1))];
+    v3 = velocity[int(CLAMP(y2, 0.0f, ny - 1)) * nx + int(CLAMP(x2, 0.0f, nx - 1))];
 
 
     float tx = (p.x - x1) / (x2 - x1);
@@ -147,6 +154,7 @@ vec2f interpolate(vec2f* grid, vec2f p) {
     return MIX(u1, u2, ty);
 }
 
+/* Advect color */
 void advect_color(float dt, float aDecay) {
     float decay = 1.0f / (1.0f + aDecay * dt);
     FOR_EACH_CELL{
@@ -160,6 +168,7 @@ void advect_color(float dt, float aDecay) {
     std::swap(old_color, new_color);
 }
 
+/* Perform self-advection*/
 void advect_velocity(float dt, float aDecay) {
     float decay = 1.0f / (1.0f + aDecay * dt);
     FOR_EACH_CELL{
@@ -169,6 +178,7 @@ void advect_velocity(float dt, float aDecay) {
     std::swap(old_velocity, new_velocity);
 }
 
+/* Velocity diffusion */
 void diffuse_vel(float dt, float vDiffusion)
 {
     float vAlpha = vDiffusion * vDiffusion / dt;
@@ -179,7 +189,6 @@ void diffuse_vel(float dt, float vDiffusion)
         vec2f uL, uR, uB, uT, uC;
         FOR_EACH_CELL
         {
-            // perfoms one iteration of jacobi method (diffuse method should be called 20-50 times per cell)
             uL = old_velocity[int(CLAMP(y, 0, ny - 1)) * nx + int(CLAMP(x - 1, 0, nx - 1))];
             uR = old_velocity[int(CLAMP(y, 0, ny - 1)) * nx + int(CLAMP(x + 1, 0, nx - 1))];
             uB = old_velocity[int(CLAMP(y - 1, 0, ny - 1)) * nx + int(CLAMP(x, 0, nx - 1))];
@@ -192,6 +201,7 @@ void diffuse_vel(float dt, float vDiffusion)
     }
 }
 
+/* Color diffusion */
 void diffuse_color(float dt, float dDiffusion)
 {
     float dAlpha = dDiffusion * dDiffusion / dt;
@@ -214,6 +224,7 @@ void diffuse_color(float dt, float dDiffusion)
     }
 }
 
+/* Perform diffusion in parallel using two threads */
 void diffuse(float dt, float dDiffusion, float vDiffusion) {
     std::thread vel{ diffuse_vel, dt, vDiffusion};
     std::thread col{ diffuse_color, dt, dDiffusion};
@@ -221,7 +232,8 @@ void diffuse(float dt, float dDiffusion, float vDiffusion) {
     col.join();
 }
 
-void pressure_iteration() {
+/* Performs jacobi iteration */
+void jacobiPressure() {
 
     memset(old_pressure, 0, nx * ny * sizeof(float));
 
@@ -245,6 +257,7 @@ void pressure_iteration() {
     }
 }
 
+/* Compute curl for vorticity shader */
 float curl(int x, int y) {
     float cL = old_velocity[int(CLAMP(x - 1, 0, nx - 1)) + nx * int(CLAMP(y, 0, ny - 1))].y;
     float cR = old_velocity[int(CLAMP(x + 1, 0, nx - 1)) + nx * int(CLAMP(y, 0, ny - 1))].y;
@@ -254,6 +267,7 @@ float curl(int x, int y) {
     return 0.5f * (cR - cL - cT + cB);
 }
 
+/* Compute vorticity */
 void vorticity_confinement(float dt) {
     FOR_EACH_CELL{
         abs_curl[x + y * nx] = fabsf(curl(x, y));
@@ -281,14 +295,14 @@ void vorticity_confinement(float dt) {
     std::swap(old_velocity, new_velocity);
 }
 
-
+/* Applies force to velocity and adds new dye */
 void apply_color_and_force(float dt, float mouseX, float mouseY)
 {
     mouseY = h - 1 - mouseY;
 
     mousePos = vec2f{ mouseX * 1.0f * nx / w, mouseY * 1.0f * ny / h };
 
-    _timePassed += deltTime;
+    _timePassed += dt;
 
     // apply gradient to color
     int roundT = int(_timePassed) % 7;
@@ -310,7 +324,7 @@ void apply_color_and_force(float dt, float mouseX, float mouseY)
 }
 
 
-void fluid_simulation_step(float dt, float mouseX, float mouseY, bool isPressed) {
+void c_OnSimulationStep(float dt, float mouseX, float mouseY, bool isPressed) {
 
     for (int i = 0; i < 6; i++)
     {
@@ -351,7 +365,7 @@ void fluid_simulation_step(float dt, float mouseX, float mouseY, bool isPressed)
     startTime = glfwGetTime();
 
     // Pressure
-    pressure_iteration();
+    jacobiPressure();
     endComputeTime = glfwGetTime() - startTime;
     averageComputeTimes[4] += endComputeTime;
     startTime = glfwGetTime();
@@ -379,32 +393,42 @@ void fluid_simulation_step(float dt, float mouseX, float mouseY, bool isPressed)
         }
     }
 
-    lastMousePos = mousePos;
-}
-
-void on_frame(float dt, float mouseX, float mouseY, bool isPressed) {
-
-    deltTime = dt;
-
-    fluid_simulation_step(dt, mouseX, mouseY, isPressed);
-
-    // density field to pixels
     FOR_EACH_CELL{
-        float R = old_color[y * nx + x].x;
-        float G = old_color[y * nx + x].y;
-        float B = old_color[y * nx + x].z;
+    float R = old_color[y * nx + x].x;
+    float G = old_color[y * nx + x].y;
+    float B = old_color[y * nx + x].z;
 
-        pixels[y * nx + x] = make_uchar4(fminf(255.0f, 255.0f * R), fminf(255.0f, 255.0f * G), fminf(255.0f, 255.0f * B), 255);
+    pixels[y * nx + x] = make_uchar4(fminf(255.0f, 255.0f * R), fminf(255.0f, 255.0f * G), fminf(255.0f, 255.0f * B), 255);
     }
 
-    // upload pixels to texture
+        // upload pixels to texture
 
 
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, nx, ny, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+
+    lastMousePos = mousePos;
 }
 
+/* Getter for logging compute times */
 double* c_getAverageTimes()
 {
     return averageComputeTimes;
 }
 
+void c_fluidSimFree()
+{
+    delete old_velocity;
+    delete new_velocity;
+
+    delete old_pressure;
+    delete new_pressure;
+
+    delete divergence;
+
+    delete abs_curl;
+
+    delete old_color;
+    delete new_color;
+
+    delete pixels;
+}

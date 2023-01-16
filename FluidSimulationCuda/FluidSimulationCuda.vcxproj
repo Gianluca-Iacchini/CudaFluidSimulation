@@ -82,18 +82,18 @@
     </CudaCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <CudaCompile Include="Src\test.cu" />
+    <CudaCompile Include="Src\GPUFluidSim.cu" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="Src\cpuFluidSim.cpp" />
+    <ClCompile Include="Src\CPUFluidSim.cpp" />
     <ClCompile Include="Src\glad.c" />
     <ClCompile Include="Src\Main.cpp" />
     <ClCompile Include="Src\Shaders\Shader.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="Src\cpuFluidSim.h" />
+    <ClInclude Include="Src\CPUFluidSim.h" />
     <ClInclude Include="Src\Shaders\Shader.h" />
-    <ClInclude Include="Src\test.cuh" />
+    <ClInclude Include="Src\GPUFluidSIm.cuh" />
   </ItemGroup>
   <ItemGroup>
     <None Include="Src\Shaders\Programs\test_shader.frag" />

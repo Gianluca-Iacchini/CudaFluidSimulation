@@ -1,4 +1,4 @@
-#include "test.cuh"
+#include "GPUFluidSim.cuh"
 #include <math.h>
 #include <cuda_gl_interop.h>
 #include <surface_functions.h>
@@ -23,6 +23,7 @@ do {                                                                  \
     }                                                                 \
 } while (0)
 
+/* Used for logging compute times. */
 double averageKernelTimes[8];
 uint64_t g_totalFrames = 0;
 
@@ -46,29 +47,6 @@ static struct SystemConfig
 	int xThreads = N_THREADS;
 	int yThreads = N_THREADS;
 } sConfig;
-
-
-static const int colorArraySize = 7;
-static float3 colorArray[colorArraySize];
-
-
-
-static float2* velocityField;
-static float* pressureField;
-static float3* dyeColorField;
-
-static float* vorticityField;
-static float* divergenceField;
-
-static uchar4* textureColorField;
-
-static size_t xSize, ySize;
-
-
-static float3 currentColor;
-static float elapsedTime = 0.0f;
-static float timeSincePress = 0.0f;
-
 
 void setConfig(
 	float vDiffusion = 0.8f,
@@ -94,35 +72,64 @@ void setConfig(
 	config.bloomEnabled = bloom;
 }
 
+/* Data structure for changing dye color over time */
+static const int colorArraySize = 7;
+static float3 colorArray[colorArraySize];
+
+static float3 currentColor;
+static float elapsedTime = 0.0f;
+static float timeSincePress = 0.0f;
+
+/* Fluid properties */
+static float2* velocityField;
+static float* pressureField;
+static float3* dyeColorField;
+
+static float* vorticityField;
+static float* divergenceField;
+
+static uchar4* textureColorField;
+
+/* Grid size */
+static size_t xSize, ySize;
+
+/* Cuda streams for diffuse computation */
+cudaStream_t stream_0;
+cudaStream_t stream_1;
+
+/* OpenGL interop variables */
 cudaGraphicsResource_t textureResource = 0;
 cudaArray* textureArray = 0;
 
 cudaSurfaceObject_t surfObj;
 cudaResourceDesc resourceDesc;
 
+/* Constant memory for recurrent read-only data */
 __constant__ int xSize_d;
 __constant__ int ySize_d;
 
 __constant__ struct Config devConstants;
 
-cudaStream_t stream_0;
-cudaStream_t stream_1;
 
+/* Getter function for logging */
 double* g_getAverageTimes()
 {
 	return averageKernelTimes;
 }
 
-// inits all buffers, must be called before computeField function call
-void cudaInit(size_t x, size_t y, int scale, GLuint texture)
+// Initialize fluid simulation data
+void g_fluidSimInit(size_t x, size_t y, int scale, GLuint texture)
 {
+	// Initialize fluid parameters
 	setConfig();
+
 
 	for (int i = 0; i < 8; i++)
 	{
 		averageKernelTimes[i] = 0;
 	}
 
+	
 	colorArray[0] = { 1.0f, 0.0f, 0.0f };
 	colorArray[1] = { 0.0f, 1.0f, 0.0f };
 	colorArray[2] = { 1.0f, 0.0f, 1.0f };
@@ -138,7 +145,7 @@ void cudaInit(size_t x, size_t y, int scale, GLuint texture)
 	config.radius /= (scale * scale);
 
 
-	
+	/* Initialize cuda resources */
 	CUDA_CALL(cudaSetDevice(0));
 	CUDA_CALL(cudaGLSetGLDevice(0));
 
@@ -162,6 +169,7 @@ void cudaInit(size_t x, size_t y, int scale, GLuint texture)
 	CUDA_CALL(cudaMemcpyToSymbol(ySize_d, &ys, sizeof(int)));
 	CUDA_CALL(cudaMemcpyToSymbol(devConstants, &config, sizeof(Config)));
 
+	/* Setup CUDA - OpenGL interop */
 	CUDA_CALL(cudaGraphicsGLRegisterImage(&textureResource, texture, GL_TEXTURE_2D, cudaGraphicsMapFlagsWriteDiscard));
 
 
@@ -173,10 +181,12 @@ void cudaInit(size_t x, size_t y, int scale, GLuint texture)
 
 	resourceDesc.res.array.array = textureArray;
 	CUDA_CALL(cudaCreateSurfaceObject(&surfObj, &resourceDesc));
+
+	
 }
 
-// releases all buffers, must be called on program exit
-void cudaExit()
+// Release all cuda resources
+void g_fluidSimFree()
 {
 	CUDA_CALL(cudaFree(velocityField));
 	CUDA_CALL(cudaFree(dyeColorField));
@@ -184,9 +194,14 @@ void cudaExit()
 	CUDA_CALL(cudaFree(pressureField));
 	CUDA_CALL(cudaFree(vorticityField));
 	CUDA_CALL(cudaFree(divergenceField));
+
+	CUDA_CALL(cudaStreamDestroy(stream_0));
+	CUDA_CALL(cudaStreamDestroy(stream_1));
+
+	CUDA_CALL(cudaDestroySurfaceObject(surfObj));
 }
 
-// interpolates quantity of grid cells
+// Bilinear interpolation. v: "imaginary particle" location, vel: quantity to interpolate (velocity)
 __device__ float2 interpolate(float2 v, float2* vel)
 {
 	float x1 = (int)v.x;
@@ -212,7 +227,7 @@ __device__ float2 interpolate(float2 v, float2* vel)
 }
 
 
-// interpolates quantity of grid cells
+// Bilinear interpolation. v: "imaginary particle" location, col: quantity to interpolate (color)
 __device__ float3 interpolate(float2 v, float3* col)
 {
 	float x1 = (int)v.x;
@@ -239,8 +254,47 @@ __device__ float3 interpolate(float2 v, float3* col)
 
 }
 
-// computes divergency of velocity field
-__global__ void computeDivergence(float* divergenceField, float2* vel)
+// Self-advection
+__global__ void advect(float2* oldVel, float dt)
+{
+	int x = blockIdx.x * blockDim.x + threadIdx.x;
+	int y = blockIdx.y * blockDim.y + threadIdx.y;
+	float decay = 1.0f / (1.0f + devConstants.densityDiffusion * dt);
+	float2 pos = { x * 1.0f, y * 1.0f };
+	float2& oldV = oldVel[y * xSize_d + x];
+
+	// Find particle starting location
+	float2 vLerp = interpolate(pos - oldV * dt, oldVel);
+	vLerp = vLerp * decay;
+
+	__syncthreads();
+	oldVel[y * xSize_d + x] = vLerp;
+}
+
+// Dye advection
+__global__ void advect(float3* oldColor, float2* vel, float dt)
+{
+
+	int x = blockIdx.x * blockDim.x + threadIdx.x;
+	int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+	float decay = 1.0f / (1.0f + devConstants.densityDiffusion * dt);
+	float2 pos = { x * 1.0f, y * 1.0f };
+	float2& oldV = vel[y * xSize_d + x];
+
+	// Find particle starting location
+	float3 cLerp = interpolate(pos - oldV * dt, oldColor);
+
+	cLerp.x = fminf(1.0f, pow(cLerp.x, 1.005f) * decay);
+	cLerp.y = fminf(1.0f, pow(cLerp.y, 1.005f) * decay);
+	cLerp.z = fminf(1.0f, pow(cLerp.z, 1.005f) * decay);
+
+	__syncthreads();
+	oldColor[y * xSize_d + x] = cLerp;
+}
+
+// Computes divergence of velocity field for pressure computation.
+__global__ void divergence(float* divergenceField, float2* vel)
 {
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
 	int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -256,50 +310,16 @@ __global__ void computeDivergence(float* divergenceField, float2* vel)
 }
 
 
-// adds quantity to particles using bilinear interpolation
-__global__ void advect(float2* oldVel, float dt)
-{
-	int x = blockIdx.x * blockDim.x + threadIdx.x;
-	int y = blockIdx.y * blockDim.y + threadIdx.y;
-	float decay = 1.0f / (1.0f + devConstants.densityDiffusion * dt);
-	float2 pos = { x * 1.0f, y * 1.0f };
-	float2& oldV = oldVel[y * xSize_d + x];
-	// find new particle tracing where it came from
-	float2 vLerp = interpolate(pos - oldV * dt, oldVel);
-	vLerp  = vLerp * decay;
 
-	__syncthreads();
-	oldVel[y * xSize_d + x] = vLerp;
-}
 
-// adds quantity to particles using bilinear interpolation
-__global__ void advect(float3* oldColor, float2* vel, float dt)
-{
-
-	int x = blockIdx.x * blockDim.x + threadIdx.x;
-	int y = blockIdx.y * blockDim.y + threadIdx.y;
-
-	float decay = 1.0f / (1.0f + devConstants.densityDiffusion * dt);
-	float2 pos = { x * 1.0f, y * 1.0f };
-	float2& oldV = vel[y * xSize_d + x];
-	// find new particle tracing where it came from
-	float3 cLerp = interpolate(pos - oldV * dt, oldColor);
-	
-	cLerp.x = fminf(1.0f, pow(cLerp.x, 1.005f) * decay);
-	cLerp.y = fminf(1.0f, pow(cLerp.y, 1.005f) * decay);
-	cLerp.z = fminf(1.0f, pow(cLerp.z, 1.005f) * decay);
-
-	__syncthreads();
-	oldColor[y * xSize_d + x] = cLerp;
-}
-
-// calculates color field diffusion
+// Color diffusion
 __global__ void diffuseCol(float3* oldColor, float dt)
 {
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
 	int y = blockIdx.y * blockDim.y + threadIdx.y;
 	__shared__ float3 colorShared[SM_SIZE][SM_SIZE];
 
+	// We can ignore corners as we only use Top, Right, Bottom, Left cells.
 	if (threadIdx.y < SM_RADIUS)
 	{
 		colorShared[threadIdx.y][threadIdx.x + SM_RADIUS] = oldColor[int(CLAMP(y - 1, 0.0f, ySize_d - 1.0f)) * xSize_d + x];
@@ -349,13 +369,14 @@ __global__ void diffuseCol(float3* oldColor, float dt)
 
 }
 
-// calculates nonzero divergency velocity field u
+// Velocity diffusion
 __global__ void diffuseVel(float2* oldVel, float dt)
 {
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
 	int y = blockIdx.y * blockDim.y + threadIdx.y;
 	__shared__ float2 velShared[SM_SIZE][SM_SIZE];
 
+	// We can ignore corners as we only use Top, Right, Bottom, Left cells.
 	if (threadIdx.y < SM_RADIUS)
 	{
 		velShared[threadIdx.y][threadIdx.x + SM_RADIUS] = oldVel[int(CLAMP(y - 1, 0.0f, ySize_d - 1.0f)) * xSize_d + x];
@@ -407,8 +428,8 @@ __global__ void diffuseVel(float2* oldVel, float dt)
 	oldVel[y * xSize_d + x] = velShared[threadIdx.y + SM_RADIUS][threadIdx.x + SM_RADIUS];
 }
 
-// fills output image with corresponding color
-__global__ void paint(uchar4* colorField, float3* oldColor)
+// Casts float to uchar4 and clamps to range 255 for OpenGL texture
+__global__ void convertToOpenGLInput(uchar4* colorField, float3* oldColor)
 {
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
 	int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -420,8 +441,8 @@ __global__ void paint(uchar4* colorField, float3* oldColor)
 	colorField[y * xSize_d + x] = make_uchar4(fminf(255.0f, 255.0f * R), fminf(255.0f, 255.0f * G), fminf(255.0f, 255.0f * B), 255);
 }
 
-// performs iteration of jacobi method on pressure field
-__global__ void computePressureImpl(float* divergenceField, float* pOld, float dt)
+// Performs jacobi iteration algorithm
+__global__ void jacobiPressure(float* divergenceField, float* pOld, float dt)
 {
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
 	int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -429,6 +450,7 @@ __global__ void computePressureImpl(float* divergenceField, float* pOld, float d
 
 	float pL, pR, pB, pT;
 
+	// We can ignore corners as we only use Top, Right, Bottom, Left cells.
 	__shared__ float pressureShared[SM_SIZE][SM_SIZE];
 
 	if (threadIdx.y < SM_RADIUS)
@@ -472,7 +494,7 @@ __global__ void computePressureImpl(float* divergenceField, float* pOld, float d
 	pOld[y * xSize_d + x] = pressureShared[threadIdx.y + SM_RADIUS][threadIdx.x + SM_RADIUS];
 }
 
-// projects pressure field on velocity field
+// Performs gradient subtraction
 __global__ void project(float2* oldVel, float* pField)
 {
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
@@ -493,7 +515,7 @@ __global__ void project(float2* oldVel, float* pField)
 	oldVel[y * xSize_d + x] -= subtractVel;
 }
 
-// applies force and add color dye to the particle field
+// Applies force to the velocity field and adds color to the color field at pos.
 __global__ void applyForce(float2* oldVel, float3* oldColor, float3 color, float2 F, float2 pos, float dt)
 {
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
@@ -510,8 +532,8 @@ __global__ void applyForce(float2* oldVel, float3* oldColor, float3 color, float
 }
 
 
-// applies vorticity to velocity field
-__global__ void computeVorticity(float2* oldVel, float *vField, float dt)
+// Applies vorticity to the velocity field
+__global__ void vorticity(float2* oldVel, float *vField, float dt)
 {
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
 	int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -550,7 +572,7 @@ __global__ void computeVorticity(float2* oldVel, float *vField, float dt)
 	oldVel[y * xSize_d + x] = newVelValue;
 }
 
-// adds flashlight effect near the mouse position
+// Adds light effect at mouse position. Not part of the physics simulation; it is only a post-process effect.
 __global__ void applyBloom(uchar4* colorField, int xpos, int ypos)
 {
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
@@ -568,6 +590,7 @@ __global__ void applyBloom(uchar4* colorField, int xpos, int ypos)
 	colorField[y * xSize_d + x] = make_uchar4(fminf(255.0f, R + maxval * e), fminf(255.0f, G + maxval * e), fminf(255.0f, B + maxval * e), 255);
 }
 
+// Writes color data to texture
 __global__ void writeToTexture(cudaSurfaceObject_t surface, uchar4* colorField)
 {
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
@@ -577,8 +600,8 @@ __global__ void writeToTexture(cudaSurfaceObject_t surface, uchar4* colorField)
 	}
 }
 
-// main function, calls vorticity -> diffusion -> force -> pressure -> project -> advect -> paint -> bloom
-void computeField(float dt, int x1pos, int y1pos, int x2pos, int y2pos, bool isPressed)
+// Performs a single time step of the simulation
+void g_OnSimulationStep(float dt, int x1pos, int y1pos, int x2pos, int y2pos, bool isPressed)
 {
 	dim3 threadsPerBlock(sConfig.xThreads, sConfig.yThreads);
 	dim3 numBlocks(xSize / threadsPerBlock.x, ySize / threadsPerBlock.y);
@@ -602,8 +625,8 @@ void computeField(float dt, int x1pos, int y1pos, int x2pos, int y2pos, bool isP
 	averageKernelTimes[0] += endKernelTime;
 	startTime = glfwGetTime();
 
-	// curls and vortisity
-	computeVorticity <<<numBlocks, threadsPerBlock >> > (velocityField, vorticityField, dt);
+	// vorticity
+	vorticity <<<numBlocks, threadsPerBlock >> > (velocityField, vorticityField, dt);
 	CUDA_CALL(cudaDeviceSynchronize());
 	endKernelTime = glfwGetTime() - startTime;
 	averageKernelTimes[1] += endKernelTime;
@@ -650,8 +673,8 @@ void computeField(float dt, int x1pos, int y1pos, int x2pos, int y2pos, bool isP
 	startTime = glfwGetTime();
 
 	// compute pressure
-	computeDivergence << <numBlocks, threadsPerBlock >> > (divergenceField, velocityField);
-	computePressureImpl << <numBlocks, threadsPerBlock >> > (divergenceField, pressureField, dt);
+	divergence << <numBlocks, threadsPerBlock >> > (divergenceField, velocityField);
+	jacobiPressure << <numBlocks, threadsPerBlock >> > (divergenceField, pressureField, dt);
 	CUDA_CALL(cudaDeviceSynchronize());
 	endKernelTime = glfwGetTime() - startTime;
 	averageKernelTimes[4] += endKernelTime;
@@ -666,7 +689,7 @@ void computeField(float dt, int x1pos, int y1pos, int x2pos, int y2pos, bool isP
 	startTime = glfwGetTime();
 
 	// paint image
-	paint <<<numBlocks, threadsPerBlock >> > (textureColorField, dyeColorField);
+	convertToOpenGLInput <<<numBlocks, threadsPerBlock >> > (textureColorField, dyeColorField);
 	CUDA_CALL(cudaDeviceSynchronize());
 	endKernelTime = glfwGetTime() - startTime;
 	averageKernelTimes[6] += endKernelTime;
